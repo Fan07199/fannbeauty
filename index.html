@@ -184,10 +184,11 @@
 
           // ═══ 選購頁 state ═══
           const [tab, setTab] = useState('shop'); // shop / orders — 主分頁
-          const [browseMode, setBrowseMode] = useState(!!_urlProduct && !_urlName); // ✅ 商品連結免登入先看
+          const [browseMode, setBrowseMode] = useState(!_urlName); // ✅ 預設先看商品，有帶名字才直接登入
           const [deepLinkDone, setDeepLinkDone] = useState(false);
           const [pendingAdd, setPendingAdd] = useState(null); // 未登入時想加入的商品，登入後補加
           const [justOrdered, setJustOrdered] = useState(null); // ✅ 剛下單的摘要，用於「通知賣家」橫幅
+          const [wantOrders, setWantOrders] = useState(false); // ✅ 未登入點「我的訂單」→ 登入後自動切過去
           const NAME_KEY = 'fann-shop-name';
           const [products, setProducts] = useState([]);
           const [productsLoaded, setProductsLoaded] = useState(false);
@@ -332,6 +333,18 @@
                 else { setPickSize(sizes.length ? '' : '_none'); setPickColor(colors.length ? '' : '_none'); setSpecModal({ product: p }); }
             }
           }, [isLoggedIn, pendingAdd]);
+
+          // ✅ 未登入點「我的訂單」→ 登入後自動切到訂單分頁
+          useEffect(() => {
+            if (isLoggedIn && wantOrders) { setTab('orders'); setWantOrders(false); }
+          }, [isLoggedIn, wantOrders]);
+
+          // 點「我的訂單」：已登入直接切，未登入先要求名字
+          const goOrders = () => {
+            if (isLoggedIn) { setTab('orders'); }
+            else { setWantOrders(true); setBrowseMode(false); }
+          };
+          const goShop = () => { setTab('shop'); };
 
           // ✅ 登入後載入該客人的寄件資訊
           useEffect(() => {
@@ -659,15 +672,15 @@
                       className="absolute right-5 top-6 text-[#C9BCA8] hover:text-[#B8A582] transition-colors">
                       <Settings size={16}/>
                   </button>
-                  {/* 分頁切換（登入後才顯示） */}
-                  {isLoggedIn && (
+                  {/* 分頁切換（登入後 或 先逛商品時都顯示） */}
+                  {(isLoggedIn || browseMode) && (
                     <div className="flex gap-2 mt-4 max-w-xs mx-auto">
-                        <button onClick={() => setTab('shop')}
-                            className={`flex-1 py-2.5 rounded-full text-[12px] font-black transition-all flex items-center justify-center gap-1.5 ${tab === 'shop' ? 'bg-[#333] text-white shadow-md' : 'bg-white/70 text-[#888] border border-[#EDE6DA]'}`}>
+                        <button onClick={goShop}
+                            className={`flex-1 py-2.5 rounded-full text-[12px] font-black transition-all flex items-center justify-center gap-1.5 ${(tab === 'shop' || browseMode) ? 'bg-[#333] text-white shadow-md' : 'bg-white/70 text-[#888] border border-[#EDE6DA]'}`}>
                             <ShoppingBag size={14}/> 選購
                         </button>
-                        <button onClick={() => setTab('orders')}
-                            className={`flex-1 py-2.5 rounded-full text-[12px] font-black transition-all flex items-center justify-center gap-1.5 relative ${tab === 'orders' ? 'bg-[#333] text-white shadow-md' : 'bg-white/70 text-[#888] border border-[#EDE6DA]'}`}>
+                        <button onClick={goOrders}
+                            className={`flex-1 py-2.5 rounded-full text-[12px] font-black transition-all flex items-center justify-center gap-1.5 relative ${(tab === 'orders' && isLoggedIn) ? 'bg-[#333] text-white shadow-md' : 'bg-white/70 text-[#888] border border-[#EDE6DA]'}`}>
                             <Package size={14}/> 我的訂單
                         </button>
                     </div>
@@ -680,7 +693,7 @@
                     <div className="bg-white/80 rounded-[3rem] p-10 border border-white shadow-xl space-y-6">
                         <div className="space-y-3">
                           <h3 className="text-[11px] font-bold text-[#555555] uppercase tracking-widest flex items-center gap-2">
-                              <User size={14}/> {pendingAdd ? '請輸入名字以加入購物車' : '請先輸入您的名字'}
+                              <User size={14}/> {pendingAdd ? '請輸入名字以加入購物車' : wantOrders ? '請輸入名字以查詢訂單' : '請先輸入您的名字'}
                           </h3>
                           {pendingAdd && (
                             <div className="flex items-center gap-3 bg-[#F5F1EA] rounded-2xl p-3 mb-1">
@@ -711,8 +724,8 @@
                           <p className="text-[11px] mt-4 text-[#6B6B6B] font-bold tracking-wider pl-2">
                             ※ 請輸入與社群相同的名稱，即可選購與查詢訂單
                           </p>
-                          {pendingAdd && (
-                            <button onClick={() => { setPendingAdd(null); setBrowseMode(true); }}
+                          {(pendingAdd || wantOrders) && (
+                            <button onClick={() => { setPendingAdd(null); setWantOrders(false); setBrowseMode(true); }}
                                 className="text-[11px] font-bold text-[#B8A582] underline">先繼續逛逛</button>
                           )}
                         </div>
