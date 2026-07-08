@@ -1,0 +1,1522 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- 版本標記：v4.3.0 ( 促銷鎖價 + 白名單 + 雙頁付款 + 合併訂單 + 動態運費 ) -->
+    <title>Fann.Beauty｜查詢訂單</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400..900;1,400..900&family=DM+Serif+Display:ital@0;1&family=Cormorant+Garamond:wght@400;500;600;700&family=Noto+Sans+TC:wght@400;500;700;900&display=swap" rel="stylesheet">
+    
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "firebase/app": "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js",
+        "firebase/firestore": "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js",
+        "firebase/auth": "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js",
+        "lucide-react": "https://esm.sh/lucide-react@0.344.0?deps=react@18.2.0"
+      }
+    }
+    </script>
+    <script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
+    <style>
+        body { font-family: 'Noto Sans TC', sans-serif; -webkit-tap-highlight-color: transparent; background-color: #FAF7F2; color: #3A3A3A; }
+        .scrollbar-hide::-webkit-scrollbar { display: none; }
+        .cursive-logo { 
+            font-family: 'Playfair Display', serif; 
+            font-style: italic;
+            font-weight: 900;
+            letter-spacing: 0.02em;
+        }
+        /* ✨ 精品感數字字體 ✨ */
+        .serif-number {
+            font-family: 'DM Serif Display', serif;
+            font-weight: 400;
+            letter-spacing: -0.02em;
+        }
+        .serif-number-small {
+            font-family: 'Cormorant Garamond', serif;
+            font-weight: 600;
+            letter-spacing: 0;
+        }
+        .animate-in { animation: fadeIn 0.4s ease-out forwards; }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        /* Toast 訊息 */
+        .toast-wrap { transition: opacity 0.3s ease, transform 0.3s ease; }
+        .toast-show { opacity: 1; transform: translate(-50%, 0); }
+        .toast-hide { opacity: 0; transform: translate(-50%, -12px); pointer-events: none; }
+        /* LINE 按鈕漸層 */
+        .line-btn {
+            background: linear-gradient(135deg, #06C755, #00B348);
+            transition: all 0.2s ease;
+        }
+        .line-btn:active { transform: scale(0.96); }
+        /* 載入動畫 */
+        @keyframes pulse-soft {
+            0%, 100% { opacity: 0.3; }
+            50% { opacity: 0.7; }
+        }
+        .pulse-soft { animation: pulse-soft 1.4s ease-in-out infinite; }
+        .line-clamp-2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect, useMemo, useRef } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { initializeApp } from 'firebase/app';
+        import { getFirestore, collection, doc, onSnapshot, setDoc, addDoc, deleteDoc, updateDoc, writeBatch, serverTimestamp } from 'firebase/firestore';
+        import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+        import { Search, ChevronRight, MessageCircle, Truck, CheckCircle2, AlertTriangle, ExternalLink, Calendar, Loader2, Package, Gift, CreditCard, Copy, MapPin, User, Phone, Store, Save, ArrowLeft, ArrowRight, ShoppingCart, ShoppingBag, Tag, Plus, Minus, X, Check, Camera, Trash2, Lock, Settings, Eye, EyeOff, Send } from 'lucide-react';
+
+        // ─── Firebase 設定 (與賣家端一致) ──────────────────────────────
+        const firebaseConfig = {
+          apiKey: "AIzaSyC_jnmyxI0XR0df2HPJJMztgnGfUWp4TOE",
+          authDomain: "fann-beauty-erp.firebaseapp.com",
+          projectId: "fann-beauty-erp",
+          storageBucket: "fann-beauty-erp.firebasestorage.app",
+          messagingSenderId: "554217440323",
+          appId: "1:554217440323:web:c589d835093fc2263480f6",
+          measurementId: "G-TKYVXJCW36"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const appId = 'fann-beauty-production-v1'; 
+        // ✅ v4.3: 動態運費改由 storeConfig.shippingFee 提供（移除寫死 SHIPPING_FEE）
+        // ✅ 官方 LINE ID
+        const LINE_OA_ID = "533krnmt";
+
+        // ─── 工具函式 ──────────────────────────────────────────────────
+        const formatDate = (dateObj) => {
+            if (!dateObj) return '';
+            const d = dateObj.seconds ? new Date(dateObj.seconds * 1000) : new Date(dateObj);
+            return `${d.getMonth() + 1}/${d.getDate()}`;
+        };
+
+        // ✅ Bug修復：與賣家端完全一致的計算邏輯
+        function getBundlePrice(qty, priceStr) {
+            if (!priceStr || qty <= 0) return 0;
+            const tiers = String(priceStr).split('/').map(s => Number(s.trim()));
+            if (tiers.length === 1) return (tiers[0] || 0) * qty;
+            let remainingQty = qty;
+            let total = 0;
+            for (let size = tiers.length; size >= 1; size--) {
+                const bundlePrice = tiers[size - 1];
+                if (bundlePrice > 0 && remainingQty >= size) {
+                    const count = Math.floor(remainingQty / size);
+                    total += count * bundlePrice;
+                    remainingQty %= size;
+                }
+            }
+            // fallback 到單價
+            if (remainingQty > 0 && tiers[0] > 0) total += remainingQty * tiers[0];
+            return total;
+        }
+
+        // ─── 選購頁工具函式 ───────────────────────────────────────────
+        const productsCol = () => collection(db, 'artifacts', appId, 'public', 'data', 'shopProducts');
+        const productDoc = (id) => doc(db, 'artifacts', appId, 'public', 'data', 'shopProducts', id);
+        const ordersCol = () => collection(db, 'artifacts', appId, 'public', 'data', 'orders');
+        const ADMIN_PIN = '0618';
+
+        // 圖片壓縮（手機上傳 → base64，600px / JPEG 0.72）
+        const resizeImage = (file) => new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = ev => {
+                const img = new Image();
+                img.onload = () => {
+                    const MAX = 600;
+                    let w = img.width, h = img.height;
+                    if (w > MAX) { h = h * MAX / w; w = MAX; }
+                    if (h > MAX) { w = w * MAX / h; h = MAX; }
+                    const c = document.createElement('canvas');
+                    c.width = w; c.height = h;
+                    c.getContext('2d').drawImage(img, 0, 0, w, h);
+                    resolve(c.toDataURL('image/jpeg', 0.72));
+                };
+                img.onerror = reject;
+                img.src = ev.target.result;
+            };
+            reader.onerror = reject;
+            reader.readAsDataURL(file);
+        });
+        const parseOptions = (str) => String(str || '').split(/[\/,、]/).map(s => s.trim()).filter(Boolean);
+
+        // ─── 主元件 ──────────────────────────────────────────────────
+        const App = () => {
+          const _urlName = (() => {
+              try { return (new URLSearchParams(window.location.search).get('name') || '').trim(); }
+              catch { return ''; }
+          })();
+          // ✅ 商品深連結 ?product=xxx
+          const _urlProduct = (() => {
+              try { return (new URLSearchParams(window.location.search).get('product') || '').trim(); }
+              catch { return ''; }
+          })();
+          const [user, setUser] = useState(null);
+          const [isLoggedIn, setIsLoggedIn] = useState(!!_urlName);
+          const [searchName, setSearchName] = useState(_urlName);
+          const [orders, setOrders] = useState([]);
+          const [archivedOrders, setArchivedOrders] = useState([]); // ✅ 新增：歷史歸檔
+          const [storeConfig, setStoreConfig] = useState({ myshipUrl: '', freeShippingThreshold: 1500, shippingFee: 38 });
+          const [storeCredits, setStoreCredits] = useState({}); // 購物金
+          const [priceBook, setPriceBook] = useState({}); // 品名用
+          const [promotion, setPromotion] = useState(null); // ✅ 促銷活動
+          const [dataLoaded, setDataLoaded] = useState(false);
+          const [toast, setToast] = useState({ show: false, msg: '', type: 'success' });
+          const toastTimer = useRef(null);
+          // ✅ 新增：寄件資訊
+          const [shippingProfile, setShippingProfile] = useState({ receiverName: '', phone: '', store: '' });
+          const [savingProfile, setSavingProfile] = useState(false);
+          const [showBankInfo, setShowBankInfo] = useState(false); // 控制匯款資訊摺疊
+          // ✅ 新增：付款流程頁面控制
+          const [currentPage, setCurrentPage] = useState('order'); // order / bank
+
+          // ═══ 選購頁 state ═══
+          const [tab, setTab] = useState('shop'); // shop / orders — 主分頁
+          const [browseMode, setBrowseMode] = useState(!!_urlProduct && !_urlName); // ✅ 商品連結免登入先看
+          const [deepLinkDone, setDeepLinkDone] = useState(false);
+          const [pendingAdd, setPendingAdd] = useState(null); // 未登入時想加入的商品，登入後補加
+          const [justOrdered, setJustOrdered] = useState(null); // ✅ 剛下單的摘要，用於「通知賣家」橫幅
+          const NAME_KEY = 'fann-shop-name';
+          const [products, setProducts] = useState([]);
+          const [productsLoaded, setProductsLoaded] = useState(false);
+          const [cart, setCart] = useState({}); // { productId__spec: {product, spec, qty} }
+          const [showConfirm, setShowConfirm] = useState(false);
+          const [submitting, setSubmitting] = useState(false);
+          const [activeCat, setActiveCat] = useState('全部');
+          const [shopSearch, setShopSearch] = useState('');
+          const [detailProduct, setDetailProduct] = useState(null);
+          const [specModal, setSpecModal] = useState(null);
+          const [pickSize, setPickSize] = useState('');
+          const [pickColor, setPickColor] = useState('');
+          // 管理區
+          const [adminMode, setAdminMode] = useState(false);
+          const [adminUnlocked, setAdminUnlocked] = useState(false);
+          const [pinInput, setPinInput] = useState('');
+
+          // ✅ 取得商品品名（相容新舊格式，沒填返空字串）
+          const getProductName = (code) => {
+              const entry = priceBook[code];
+              if (entry == null || typeof entry !== 'object') return '';
+              return String(entry.name || '').trim();
+          };
+
+          // ✅ 促銷計算（與賣家端邏輯相同）
+          const isPromoActive = (promo) => {
+              if (!promo || !promo.enabled) return false;
+              const now = new Date();
+              if (promo.startAt && new Date(promo.startAt) > now) return false;
+              if (promo.endAt   && new Date(promo.endAt)   < now) return false;
+              return true;
+          };
+          // ✅ 白名單過濾：取得參與優惠的品項小計和數量
+          const getEligible = (promo, codeGroups) => {
+              let subtotal = 0; let qty = 0;
+              const useWL = promo.itemFilter === 'whitelist' && Array.isArray(promo.whitelist) && promo.whitelist.length > 0;
+              Object.entries(codeGroups).forEach(([code, cg]) => {
+                  if (useWL && !promo.whitelist.includes(code)) return;
+                  subtotal += (cg.subtotal || 0);
+                  qty += (cg.totalQty || 0);
+              });
+              return { subtotal, qty };
+          };
+          // ✅ 折扣計算（傳入 codeGroups，做白名單過濾）
+          const calcDiscount = (promo, codeGroups, locked = false) => {
+              if (!locked && !isPromoActive(promo)) return 0;
+              const { subtotal: eTotal, qty: eQty } = getEligible(promo, codeGroups);
+              if (eTotal === 0) return 0;
+              switch (promo.type) {
+                  case 'fixed':
+                      return Math.min((Number(promo.value) || 0) * eQty, eTotal);
+                  case 'percent': {
+                      const pct = Number(promo.percent) || 100;
+                      return Math.round(eTotal * (100 - pct) / 100);
+                  }
+                  case 'threshold':
+                      return eTotal >= (Number(promo.threshold) || 0)
+                          ? (Number(promo.thresholdDiscount) || 0) : 0;
+                  default: return 0;
+              }
+          };
+
+          const showMessage = (msg, type = 'success') => {
+              if (toastTimer.current) clearTimeout(toastTimer.current);
+              setToast({ show: true, msg, type });
+              toastTimer.current = setTimeout(() => setToast(t => ({ ...t, show: false })), 3000);
+          };
+
+          // Firebase 匿名登入
+          useEffect(() => {
+            signInAnonymously(auth).catch(err => console.error("Auth Error:", err));
+            const unsubscribe = onAuthStateChanged(auth, u => setUser(u));
+            return () => unsubscribe();
+          }, []);
+
+          // 雲端資料即時同步
+          useEffect(() => {
+            if (!user) return;
+            
+            const unsubOrders = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'orders'), snap => {
+                setOrders(snap.docs.map(d => ({ ...d.data(), id: d.id })));
+                setDataLoaded(true);
+            }, err => console.error("Orders sync error:", err));
+
+            const unsubStore = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'storeConfig'), d => {
+                if (d.exists()) setStoreConfig(d.data());
+            }, err => console.error("Config sync error:", err));
+
+            const unsubCredits = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'storeCredits'), snap => {
+                const map = {};
+                snap.docs.forEach(d => { map[d.id] = d.data(); });
+                setStoreCredits(map);
+            }, err => console.error("Credits sync error:", err));
+
+            // ✅ 新增：監聽價格庫（為了取得品名）
+            const unsubPrice = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'priceBook'), d => {
+                if (d.exists()) setPriceBook(d.data());
+            }, err => console.error("PriceBook sync error:", err));
+
+            // ✅ 新增：監聽促銷活動
+            const unsubPromo = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'promotion'), d => {
+                if (d.exists()) setPromotion(d.data());
+                else setPromotion(null);
+            }, err => console.error("Promo sync error:", err));
+
+            // ✅ 新增：監聽歸檔訂單（讓客人能查永久歷史）
+            const unsubArchived = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'archivedOrders'), snap => {
+                setArchivedOrders(snap.docs.map(d => ({ ...d.data(), id: d.id, _archived: true })));
+            }, err => console.error("Archived sync error:", err));
+
+            return () => { unsubOrders(); unsubStore(); unsubCredits(); unsubPrice(); unsubPromo(); unsubArchived(); };
+          }, [user]);
+
+          // ✅ 選購頁：監聽商品
+          useEffect(() => {
+            if (!user) return;
+            const unsub = onSnapshot(productsCol(), snap => {
+                const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+                setProducts(list);
+                setProductsLoaded(true);
+            }, () => setProductsLoaded(true));
+            return () => unsub();
+          }, [user]);
+
+          // ✅ 商品深連結：商品載入後自動開啟指定商品詳情
+          useEffect(() => {
+            if (deepLinkDone || !_urlProduct || !productsLoaded) return;
+            const found = products.find(p => p.id === _urlProduct);
+            if (found) { setDetailProduct(found); setDeepLinkDone(true); }
+            else if (products.length > 0) { setDeepLinkDone(true); } // 找不到就作罷
+          }, [products, productsLoaded, deepLinkDone]);
+
+          // ✅ 登入後若有待加入商品（從商品連結免登入瀏覽時點的），自動繼續
+          useEffect(() => {
+            if (isLoggedIn && pendingAdd) {
+                const p = pendingAdd;
+                setPendingAdd(null);
+                const sizes = parseOptions(p.sizes);
+                const colors = parseOptions(p.colors);
+                if (sizes.length === 0 && colors.length === 0) { addToCart(p, ''); }
+                else { setPickSize(sizes.length ? '' : '_none'); setPickColor(colors.length ? '' : '_none'); setSpecModal({ product: p }); }
+            }
+          }, [isLoggedIn, pendingAdd]);
+
+          // ✅ 登入後載入該客人的寄件資訊
+          useEffect(() => {
+              if (!isLoggedIn || !searchName.trim() || !user) return;
+              const trimmedName = searchName.trim();
+              const unsub = onSnapshot(
+                  doc(db, 'artifacts', appId, 'public', 'data', 'customerProfiles', trimmedName),
+                  d => {
+                      if (d.exists()) {
+                          const data = d.data();
+                          setShippingProfile({
+                              receiverName: data.receiverName || '',
+                              phone: data.phone || '',
+                              store: data.store || ''
+                          });
+                      } else {
+                          setShippingProfile({ receiverName: '', phone: '', store: '' });
+                      }
+                  },
+                  err => console.error("Profile load error:", err)
+              );
+              return () => unsub();
+          }, [isLoggedIn, searchName, user]);
+
+          // ✅ 儲存寄件資訊
+          const saveShippingProfile = async () => {
+              const name = searchName.trim();
+              if (!name) return;
+              if (!shippingProfile.receiverName.trim() || !shippingProfile.phone.trim() || !shippingProfile.store.trim()) {
+                  showMessage("請填寫完整資訊", 'warn');
+                  return;
+              }
+              setSavingProfile(true);
+              try {
+                  await setDoc(
+                      doc(db, 'artifacts', appId, 'public', 'data', 'customerProfiles', name),
+                      {
+                          receiverName: shippingProfile.receiverName.trim(),
+                          phone: shippingProfile.phone.trim(),
+                          store: shippingProfile.store.trim(),
+                          updatedAt: new Date().toISOString()
+                      },
+                      { merge: true }
+                  );
+                  showMessage("寄件資訊已送出 ✅");
+              } catch (err) {
+                  console.error("Save profile error:", err);
+                  showMessage("儲存失敗，請稍後再試", 'error');
+              } finally {
+                  setSavingProfile(false);
+              }
+          };
+
+          // ✅ Bug修復：改善名字比對邏輯，trim + 忽略大小寫雙向比對
+          // ✅ 重構：myOrder 拆成「最新訂單」和「歷史訂單」
+          // ✅ v4.3：支援合併訂單（mergeGroupId），與賣家端一致
+          const { currentOrder, pastOrders } = useMemo(() => {
+            if (!isLoggedIn || !searchName.trim()) return { currentOrder: null, pastOrders: [] };
+            const sn = searchName.trim().toLowerCase();
+            const allItems = [...orders, ...archivedOrders];
+            const myItems = allItems.filter(o => (o.customerName || '').trim().toLowerCase() === sn);
+            
+            if (myItems.length === 0) return { currentOrder: null, pastOrders: [] };
+
+            // ✅ v4.3：有 mergeGroupId 的訂單歸同一張；否則按「日期」分組
+            const grouped = {};
+            myItems.forEach(o => {
+                if (!o.createdAt || !o.createdAt.seconds) return;
+                let groupKey;
+                if (o.mergeGroupId) {
+                    groupKey = `merged__${o.mergeGroupId}`;
+                } else {
+                    const d = new Date(o.createdAt.seconds * 1000);
+                    groupKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+                }
+                if (!grouped[groupKey]) {
+                    grouped[groupKey] = {
+                        name: o.customerName,
+                        codeGroups: {},
+                        itemTotal: 0,
+                        finalTotal: 0,
+                        status: 'pending',
+                        date: o.createdAt,
+                        creditApplied: 0,
+                        _archived: o._archived,
+                        _isMerged: !!o.mergeGroupId
+                    };
+                }
+                const group = grouped[groupKey];
+                // ✅ v4.3：合併訂單跨日時，顯示用最早那天
+                if (o.createdAt.seconds < group.date.seconds) group.date = o.createdAt;
+                if (!group.codeGroups[o.itemCode]) {
+                    group.codeGroups[o.itemCode] = { items: [], totalQty: 0, priceStr: o.price };
+                }
+                group.codeGroups[o.itemCode].items.push(o);
+                group.codeGroups[o.itemCode].totalQty += (Number(o.quantity) || 1);
+                if (o.status === 'shipped') group.status = 'shipped';
+                else if (o.status === 'completed' && group.status !== 'shipped') group.status = 'completed';
+                if (o.creditApplied && !group.creditApplied) {
+                    group.creditApplied = Number(o.creditApplied) || 0;
+                }
+                // ✅ 收集訂單上鎖住的促銷快照
+                if (o.promoSnapshot && !group.promoSnapshot) {
+                    group.promoSnapshot = o.promoSnapshot;
+                }
+            });
+
+            // 計算每組的小計
+            const threshold = storeConfig.freeShippingThreshold || 1500;
+            const shippingFeeAmt = storeConfig.shippingFee ?? 38; // ✅ v4.3 動態運費
+            const allGroups = Object.values(grouped).map(g => {
+                let total = 0;
+                const totalQty = Object.values(g.codeGroups).reduce((s, cg) => s + cg.totalQty, 0);
+                Object.values(g.codeGroups).forEach(cg => { 
+                    cg.subtotal = getBundlePrice(cg.totalQty, cg.priceStr); 
+                    total += cg.subtotal; 
+                });
+                g.itemTotal = total;
+                g.hasShippingFee = g.itemTotal < threshold && g.itemTotal > 0;
+                g.shippingFeeAmt = shippingFeeAmt;
+                const baseTotal = g.hasShippingFee ? g.itemTotal + shippingFeeAmt : g.itemTotal;
+                // ✅ 促銷折扣（優先用訂單鎖住的快照，日期過了也不變）
+                let usedPromo = null;
+                if (g.promoSnapshot && g.promoSnapshot.enabled) {
+                    usedPromo = g.promoSnapshot;
+                } else if (promotion && promotion.enabled) {
+                    const orderTime = g.date?.seconds ? new Date(g.date.seconds * 1000) : new Date();
+                    if ((!promotion.startAt || new Date(promotion.startAt) <= orderTime) &&
+                        (!promotion.endAt   || new Date(promotion.endAt)   >= orderTime)) {
+                        usedPromo = promotion;
+                    }
+                }
+                const isLocked = !!(g.promoSnapshot && g.promoSnapshot.enabled);
+                g.promoDiscount = usedPromo ? calcDiscount(usedPromo, g.codeGroups, isLocked) : 0;
+                g.promoName = usedPromo ? (usedPromo.name || '促銷折扣') : '';
+                g.creditApplied = g.creditApplied || 0;
+                g.finalTotal = Math.max(0, baseTotal - g.promoDiscount - g.creditApplied);
+                g.creditBalance = storeCredits[g.name]?.balance || 0;
+                return g;
+            }).sort((a, b) => (b.date?.seconds || 0) - (a.date?.seconds || 0)); // 新到舊
+
+            return {
+                currentOrder: allGroups[0] || null,
+                pastOrders: allGroups.slice(1)
+            };
+          }, [isLoggedIn, orders, archivedOrders, searchName, storeConfig.freeShippingThreshold, storeConfig.shippingFee, storeCredits, promotion]);
+
+          // ✅ 為了相容舊代碼，保留 myOrder 變數
+          const myOrder = currentOrder;
+
+          // ✅ 回報官方賴功能（修正 LINE 連結格式）
+          const handleLineReport = () => {
+              if (!myOrder) return;
+              const itemList = Object.entries(myOrder.codeGroups)
+                  .map(([code, cg]) => `${code} x${cg.totalQty}`)
+                  .join('、');
+              const statusText = myOrder.status === 'shipped' ? '已寄出' : 
+                                 myOrder.status === 'completed' ? '已付款' : '已下單';
+              const msg = `Hi～我是 ${myOrder.name} 🙌\n已完成下單囉！\n\n品項：${itemList}\n金額：$${myOrder.finalTotal}`;
+              const encoded = encodeURIComponent(msg);
+              // ✅ 修正：LINE 官方帳號連結需加 @ 前綴
+              window.open(`https://line.me/R/oaMessage/@${LINE_OA_ID}/?${encoded}`, '_blank', 'noopener,noreferrer');
+              showMessage("已為您開啟 LINE ✨");
+          };
+
+          // ✅ Bug修復：安全開啟賣貨便網址（防止 javascript: / data: 等協議注入）
+          const handleGoToMyship = () => {
+              const url = (storeConfig.myshipUrl || '').trim();
+              if (!url) {
+                  showMessage("賣貨便網址尚未設定", 'warn');
+                  return;
+              }
+              // 驗證只允許 http/https 協議
+              if (!/^https?:\/\//i.test(url)) {
+                  showMessage("網址格式錯誤，請聯繫賣家", 'error');
+                  return;
+              }
+              window.open(url, '_blank', 'noopener,noreferrer');
+          };
+
+          // ═══ 選購頁邏輯 ═══
+          const liveProducts = useMemo(() => products.filter(p => p.active !== false), [products]);
+          const categories = useMemo(() => {
+              const set = new Set();
+              liveProducts.forEach(p => { if (p.category && p.category.trim()) set.add(p.category.trim()); });
+              return ['全部', ...Array.from(set)];
+          }, [liveProducts]);
+          const shownProducts = useMemo(() => {
+              const q = shopSearch.trim().toLowerCase();
+              return liveProducts.filter(p => {
+                  if (activeCat !== '全部' && (p.category || '').trim() !== activeCat) return false;
+                  if (q) {
+                      const hay = `${p.name || ''} ${p.code || ''} ${p.category || ''}`.toLowerCase();
+                      if (!hay.includes(q)) return false;
+                  }
+                  return true;
+              });
+          }, [liveProducts, activeCat, shopSearch]);
+
+          const cartItems = useMemo(() => Object.values(cart), [cart]);
+          const cartCount = useMemo(() => cartItems.reduce((s, i) => s + i.qty, 0), [cartItems]);
+          const cartTotal = useMemo(() => cartItems.reduce((s, i) => s + Number(i.product.price || 0) * i.qty, 0), [cartItems]);
+
+          const startAdd = (product) => {
+              // ✅ 未登入（商品連結進來）→ 記住想加的商品，先要求輸入名字
+              if (!isLoggedIn) {
+                  setPendingAdd(product);
+                  setBrowseMode(false); // 顯示名字輸入
+                  setDetailProduct(null);
+                  return;
+              }
+              const sizes = parseOptions(product.sizes);
+              const colors = parseOptions(product.colors);
+              if (sizes.length === 0 && colors.length === 0) { addToCart(product, ''); return; }
+              setPickSize(sizes.length ? '' : '_none');
+              setPickColor(colors.length ? '' : '_none');
+              setSpecModal({ product });
+          };
+          const confirmSpec = () => {
+              const p = specModal.product;
+              const sizes = parseOptions(p.sizes);
+              const colors = parseOptions(p.colors);
+              if (sizes.length && !pickSize) { showMessage('請選擇尺寸', 'warn'); return; }
+              if (colors.length && !pickColor) { showMessage('請選擇顏色', 'warn'); return; }
+              const parts = [];
+              if (pickSize && pickSize !== '_none') parts.push(pickSize);
+              if (pickColor && pickColor !== '_none') parts.push(pickColor);
+              addToCart(p, parts.join(' '));
+              setSpecModal(null);
+          };
+          const addToCart = (product, spec) => {
+              const key = `${product.id}__${spec}`;
+              setCart(prev => {
+                  const cur = prev[key];
+                  return { ...prev, [key]: { product, spec, qty: (cur?.qty || 0) + 1 } };
+              });
+              showMessage(`已加入 ${product.name}${spec ? ` (${spec})` : ''}`);
+          };
+          const changeQty = (key, delta) => {
+              setCart(prev => {
+                  const cur = prev[key];
+                  if (!cur) return prev;
+                  const q = cur.qty + delta;
+                  if (q <= 0) { const n = { ...prev }; delete n[key]; return n; }
+                  return { ...prev, [key]: { ...cur, qty: q } };
+              });
+          };
+          const openConfirm = () => {
+              if (!searchName.trim()) { showMessage('請先在上方輸入名字', 'warn'); return; }
+              if (cartItems.length === 0) { showMessage('購物車是空的', 'warn'); return; }
+              setShowConfirm(true);
+          };
+          // ✅ 送出訂單（欄位與賣家後台一致）
+          const submitOrder = async () => {
+              if (!searchName.trim()) { showMessage('請先輸入名字', 'warn'); return; }
+              if (cartItems.length === 0) return;
+              setSubmitting(true);
+              try {
+                  const batch = writeBatch(db);
+                  cartItems.forEach(item => {
+                      const ref = doc(ordersCol());
+                      batch.set(ref, {
+                          customerName: searchName.trim(),
+                          itemCode: (item.product.code || item.product.name || '').toUpperCase(),
+                          spec: item.spec || '',
+                          quantity: item.qty,
+                          price: String(item.product.price || 0),
+                          status: 'pending',
+                          customerLineId: '',
+                          stockStatus: 'none',
+                          source: 'shop',
+                          productName: item.product.name || '',
+                          createdAt: serverTimestamp()
+                      });
+                  });
+                  await batch.commit();
+                  // ✅ 記下這次下單摘要，供「通知賣家」使用
+                  const summaryList = cartItems.map(i => `${i.product.name}${i.spec ? ` (${i.spec})` : ''} x${i.qty}`).join('\n');
+                  setJustOrdered({ name: searchName.trim(), list: summaryList, total: cartTotal });
+                  setCart({});
+                  setShowConfirm(false);
+                  try { localStorage.setItem(NAME_KEY, searchName.trim()); } catch {}
+                  showMessage('下單完成！已進入我的訂單 💕');
+                  setTab('orders'); // ✅ 下單後直接切到我的訂單
+                  setCurrentPage('order');
+              } catch (err) {
+                  console.error('送單失敗:', err);
+                  showMessage('送出失敗，請稍後再試', 'error');
+              } finally { setSubmitting(false); }
+          };
+          // ✅ 通知賣家（開啟官方帳號、帶入下單摘要）
+          const notifySeller = () => {
+              if (!justOrdered) return;
+              const msg = `Hi～我是 ${justOrdered.name} 🙌\n剛在選購頁下單囉！\n\n${justOrdered.list}\n金額：$${justOrdered.total}`;
+              const encoded = encodeURIComponent(msg);
+              window.open(`https://line.me/R/oaMessage/@${LINE_OA_ID}/?${encoded}`, '_blank', 'noopener,noreferrer');
+          };
+          const tryUnlock = () => {
+              if (pinInput === ADMIN_PIN) { setAdminUnlocked(true); setPinInput(''); }
+              else showMessage('密碼錯誤', 'error');
+          };
+
+          // ✅ 狀態設定對照表（新增 shipped）
+          const statusConfig = {
+              pending: { label: '🛒 待結帳', bg: 'bg-[#E8DFD0]', text: 'text-[#B8A582]' },
+              completed: { label: '✅ 已付款', bg: 'bg-[#E8EBE0]', text: 'text-[#7A8A5A]' },
+              shipped: { label: '📦 已寄出', bg: 'bg-[#E8DFD0]', text: 'text-[#7A6855]' }
+          };
+
+          return (
+            <div className="min-h-screen flex flex-col font-sans select-none bg-[#FAF7F2] text-[#3A3A3A]">
+
+              {/* Toast */}
+              <div className={`toast-wrap fixed top-10 left-1/2 z-[100] px-5 py-3 rounded-full text-xs font-bold shadow-2xl flex items-center gap-2 pointer-events-none
+                  ${toast.type === 'error' ? 'bg-[#B55550]/90 text-white' : toast.type === 'warn' ? 'bg-[#C9B88A]/90 text-white' : 'bg-[#333]/90 text-white'}
+                  ${toast.show ? 'toast-show' : 'toast-hide'}`}>
+                <CheckCircle2 size={14} className="text-[#8A9A6A] shrink-0"/> {toast.msg}
+              </div>
+              
+              <header className="p-6 text-center w-full sticky top-0 z-20 bg-white/60 backdrop-blur-md pb-4 border-b border-white relative">
+                  <h1 className="text-3xl cursive-logo text-[#B8A582]">Fann.Beauty</h1>
+                  <p className="text-[10px] font-bold opacity-30 tracking-[0.4em] uppercase mt-1">Select Shop</p>
+                  {/* 管理入口 */}
+                  <button onClick={() => setAdminMode(true)}
+                      className="absolute right-5 top-6 text-[#C9BCA8] hover:text-[#B8A582] transition-colors">
+                      <Settings size={16}/>
+                  </button>
+                  {/* 分頁切換（登入後才顯示） */}
+                  {isLoggedIn && (
+                    <div className="flex gap-2 mt-4 max-w-xs mx-auto">
+                        <button onClick={() => setTab('shop')}
+                            className={`flex-1 py-2.5 rounded-full text-[12px] font-black transition-all flex items-center justify-center gap-1.5 ${tab === 'shop' ? 'bg-[#333] text-white shadow-md' : 'bg-white/70 text-[#888] border border-[#EDE6DA]'}`}>
+                            <ShoppingBag size={14}/> 選購
+                        </button>
+                        <button onClick={() => setTab('orders')}
+                            className={`flex-1 py-2.5 rounded-full text-[12px] font-black transition-all flex items-center justify-center gap-1.5 relative ${tab === 'orders' ? 'bg-[#333] text-white shadow-md' : 'bg-white/70 text-[#888] border border-[#EDE6DA]'}`}>
+                            <Package size={14}/> 我的訂單
+                        </button>
+                    </div>
+                  )}
+              </header>
+
+              <main className="flex-1 p-6 max-w-md mx-auto w-full pb-28">
+                {(!isLoggedIn && !browseMode) ? (
+                  <div className="mt-6 space-y-8 animate-in">
+                    <div className="bg-white/80 rounded-[3rem] p-10 border border-white shadow-xl space-y-6">
+                        <div className="space-y-3">
+                          <h3 className="text-[11px] font-bold text-[#555555] uppercase tracking-widest flex items-center gap-2">
+                              <User size={14}/> {pendingAdd ? '請輸入名字以加入購物車' : '請先輸入您的名字'}
+                          </h3>
+                          {pendingAdd && (
+                            <div className="flex items-center gap-3 bg-[#F5F1EA] rounded-2xl p-3 mb-1">
+                                <div className="w-12 h-12 rounded-xl bg-white overflow-hidden flex items-center justify-center shrink-0">
+                                    {pendingAdd.image ? <img src={pendingAdd.image} className="w-full h-full object-cover"/> : <ShoppingBag size={18} className="text-[#C9BCA8]"/>}
+                                </div>
+                                <div className="min-w-0">
+                                    <div className="text-[13px] font-black text-[#3A3A3A] truncate">{pendingAdd.name}</div>
+                                    <div className="serif-number text-[15px] text-[#B8A582]">${Number(pendingAdd.price).toLocaleString()}</div>
+                                </div>
+                            </div>
+                          )}
+                          <div className="relative">
+                            <input 
+                              value={searchName} 
+                              onChange={e => setSearchName(e.target.value)} 
+                              onKeyDown={e => e.key === 'Enter' && searchName.trim() && (setIsLoggedIn(true), (()=>{try{localStorage.setItem(NAME_KEY,searchName.trim())}catch{}})())} 
+                              placeholder="您的名稱..." 
+                              className="w-full py-5 px-6 bg-white rounded-full text-sm font-bold outline-none focus:ring-2 ring-[#EDE6DA] transition-all shadow-sm" 
+                            />
+                            <button 
+                              onClick={() => { if (searchName.trim()) { setIsLoggedIn(true); try{localStorage.setItem(NAME_KEY,searchName.trim())}catch{} } }} 
+                              className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 bg-[#333] text-white rounded-full flex items-center justify-center active:scale-90 transition-transform shadow-md"
+                            >
+                              <ChevronRight size={20}/>
+                            </button>
+                          </div>
+                          <p className="text-[11px] mt-4 text-[#6B6B6B] font-bold tracking-wider pl-2">
+                            ※ 請輸入與社群相同的名稱，即可選購與查詢訂單
+                          </p>
+                          {pendingAdd && (
+                            <button onClick={() => { setPendingAdd(null); setBrowseMode(true); }}
+                                className="text-[11px] font-bold text-[#B8A582] underline">先繼續逛逛</button>
+                          )}
+                        </div>
+                    </div>
+                  </div>
+                ) : (isLoggedIn && tab === 'orders') ? (
+                  <div className="mt-2 space-y-8 animate-in">
+                    <div className="flex items-center gap-4 px-2">
+                        <div className="w-14 h-14 rounded-full border-4 border-white shadow-lg overflow-hidden bg-white shrink-0">
+                          <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(searchName)}`} alt="avatar" />
+                        </div>
+                        <div>
+                          <h3 className="text-lg font-black">Hi, {searchName}</h3>
+                          <button onClick={() => { setIsLoggedIn(false); setSearchName(''); setCurrentPage('order'); try{localStorage.removeItem(NAME_KEY)}catch{} }} className="text-[10px] font-bold text-[#6B6B6B] uppercase tracking-widest mt-0.5 hover:text-[#3A3A3A] transition-colors">
+                              Logout / 登出返回
+                          </button>
+                        </div>
+                    </div>
+
+                    {/* ✅ 下單成功後：通知賣家橫幅 */}
+                    {justOrdered && (
+                      <div className="bg-white rounded-[2rem] p-5 shadow-lg border border-[#D9E8D0] space-y-3 animate-in">
+                          <div className="flex items-center gap-2">
+                              <div className="w-9 h-9 rounded-full bg-[#E8EBE0] flex items-center justify-center shrink-0"><Check size={18} className="text-[#7A8A5A]"/></div>
+                              <div>
+                                  <div className="text-[13px] font-black text-[#3A3A3A]">下單完成！</div>
+                                  <div className="text-[11px] text-[#6B6B6B] font-bold">建議點下方按鈕通知賣家，出貨更快</div>
+                              </div>
+                          </div>
+                          <button onClick={notifySeller}
+                              className="w-full py-3.5 rounded-2xl text-white text-sm font-black shadow-md active:scale-95 transition-all flex items-center justify-center gap-2"
+                              style={{background: 'linear-gradient(135deg,#06C755,#00B348)'}}>
+                              <Send size={15}/> 通知賣家我已下單
+                          </button>
+                          <button onClick={() => setJustOrdered(null)}
+                              className="w-full text-[11px] font-bold text-[#B8A582] underline">我知道了，關閉</button>
+                      </div>
+                    )}
+
+                    {/* ✅ 訂單載入判斷 */}
+                    {!dataLoaded ? (
+                        <div className="bg-white/60 p-16 rounded-[3rem] border border-white text-center">
+                            <Loader2 size={28} className="mx-auto mb-4 text-[#B8A582] animate-spin"/>
+                            <p className="text-xs font-bold text-[#555555] pulse-soft">正在讀取您的訂單...</p>
+                        </div>
+                    ) : myOrder ? (
+                      <div className="bg-white rounded-[3rem] p-8 shadow-2xl border border-white space-y-7 relative">
+
+                        {/* 日期標記 */}
+                        <div className="absolute top-8 right-8 flex items-center gap-1 text-[11px] font-black italic text-[#6B6B6B]">
+                           <Calendar size={11}/> {formatDate(myOrder.date)}
+                        </div>
+                        
+                        {/* 狀態顯示 - 已加入 shipped */}
+                        <div className="flex justify-between items-center pb-4 border-b border-[#EDE6DA]">
+                          <span className="text-[11px] font-bold text-[#555555] uppercase tracking-widest">目前狀態</span>
+                          <span className={`px-5 py-2 rounded-full text-[10px] font-black ${statusConfig[myOrder.status].bg} ${statusConfig[myOrder.status].text}`}>
+                            {statusConfig[myOrder.status].label}
+                          </span>
+                        </div>
+
+                        {/* 商品明細 */}
+                        <div className="space-y-5">
+                          {Object.entries(myOrder.codeGroups).map(([code, cg]) => {
+                            const productName = getProductName(code);
+                            return (
+                            <div key={code} className="border-b border-[#EDE6DA] pb-5 last:border-0 last:pb-0">
+                              <div className="flex justify-between items-start mb-2">
+                                <div className="flex-1 min-w-0">
+                                    <div className="font-bold text-[#3A3A3A] text-sm">
+                                        {code} <span className="serif-number-small text-sm text-[#6B6B6B] ml-1">×{cg.totalQty}</span>
+                                    </div>
+                                    {productName && (
+                                        <div className="text-[11px] text-[#888888] font-bold mt-1 tracking-wide">{productName}</div>
+                                    )}
+                                </div>
+                                <span className="serif-number text-xl text-[#B8A582] shrink-0 ml-2">${cg.subtotal.toLocaleString()}</span>
+                              </div>
+                              <div className="space-y-1.5 pl-3">
+                                {cg.items.map(i => (
+                                  <div key={i.id} className="flex justify-between text-[11px] text-[#555555]">
+                                    <span>- {i.spec || '單一'}</span>
+                                    <span className="serif-number-small text-sm text-[#6B6B6B]">×{i.quantity}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                            );
+                          })}
+                        </div>
+
+                        {/* ✅ 促銷 Badge（進行中才顯示） */}
+                        {myOrder.promoDiscount > 0 && (
+                            <div className="bg-gradient-to-r from-[#FFF3E0] to-[#FFF8EE] rounded-2xl p-4 border border-[#FFD580] flex items-center gap-3">
+                                <div className="w-9 h-9 rounded-full bg-[#E07B00] flex items-center justify-center shrink-0">
+                                    <Tag size={16} className="text-white"/>
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                    <div className="font-black text-sm text-[#E07B00]">
+                                        {myOrder.promoName || '限時優惠'}
+                                    </div>
+                                    <div className="text-[10px] font-bold text-[#E07B00]/70 mt-0.5">
+                                        已為您自動套用優惠 🎉
+                                    </div>
+                                </div>
+                                <div className="text-right shrink-0">
+                                    <div className="serif-number text-xl text-[#E07B00] leading-none">
+                                        -${myOrder.promoDiscount.toLocaleString()}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* 金額計算 */}
+                        <div className="pt-6 border-t border-[#EDE6DA] space-y-3">
+                            <div className="flex justify-between items-center">
+                                <span className="text-xs font-bold text-[#555555]">商品小計</span>
+                                <span className="serif-number text-lg text-[#3A3A3A]">${myOrder.itemTotal.toLocaleString()}</span>
+                            </div>
+                            <div className="flex justify-between items-center">
+                                <span className="text-xs font-bold text-[#555555]">運費</span>
+                                <span className={myOrder.hasShippingFee ? 'serif-number text-lg text-[#3A3A3A]' : 'text-xs font-bold text-[#6B7A4A]'}>
+                                    {myOrder.hasShippingFee ? `$${myOrder.shippingFeeAmt ?? storeConfig.shippingFee ?? 38}` : '已達免運門檻 🎉'}
+                                </span>
+                            </div>
+                            {/* ✅ 促銷折扣行 */}
+                            {myOrder.promoDiscount > 0 && (
+                                <div className="flex justify-between items-center">
+                                    <span className="text-xs font-bold text-[#E07B00] flex items-center gap-1">
+                                        <Tag size={11}/> {myOrder.promoName || '限時優惠'}
+                                    </span>
+                                    <span className="serif-number text-lg text-[#E07B00]">-${myOrder.promoDiscount.toLocaleString()}</span>
+                                </div>
+                            )}
+                            {/* ✅ 購物金折抵顯示 */}
+                            {myOrder.creditApplied > 0 && (
+                                <div className="flex justify-between items-center">
+                                    <span className="text-xs font-bold text-[#B8A582] flex items-center gap-1">
+                                        <Gift size={11}/> 購物金折抵
+                                    </span>
+                                    <span className="serif-number text-lg text-[#B8A582]">-${myOrder.creditApplied.toLocaleString()}</span>
+                                </div>
+                            )}
+                            <div className="flex justify-between items-end pt-5 border-t border-dashed border-[#DDD2BE]">
+                              <span className="text-[11px] font-black text-[#6B6B6B] uppercase mb-2 tracking-[0.25em]">Total</span>
+                              <span className="serif-number text-6xl text-[#B8A582] leading-none">${myOrder.finalTotal.toLocaleString()}</span>
+                            </div>
+                        </div>
+
+                        {/* ✅ 購物金餘額卡片（若還有餘額） */}
+                        {myOrder.creditBalance > 0 && (
+                            <div className="bg-gradient-to-br from-[#F5F1EA] to-[#EDE6DA] rounded-2xl p-4 border border-[#DDD2BE] flex items-center justify-between">
+                                <div className="flex items-center gap-3">
+                                    <div className="w-10 h-10 rounded-full bg-white flex items-center justify-center border border-[#DDD2BE] shadow-sm">
+                                        <Gift size={16} className="text-[#B8A582]"/>
+                                    </div>
+                                    <div>
+                                        <div className="text-[10px] font-bold text-[#6B6B6B] uppercase tracking-wider">您的購物金</div>
+                                        <div className="text-[10px] text-[#888888] font-bold mt-0.5">下次消費可折抵</div>
+                                    </div>
+                                </div>
+                                <div className="serif-number text-3xl text-[#B8A582] leading-none">
+                                    ${myOrder.creditBalance.toLocaleString()}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* ✅ 已寄出狀態：特別提示 */}
+                        {myOrder.status === 'shipped' && (
+                            <div className="bg-[#E8DFD0] border border-[#D9CFC2] rounded-2xl p-4 flex items-start gap-2">
+                                <Package size={14} className="text-[#7A6855] mt-0.5 shrink-0"/>
+                                <p className="text-[11px] font-bold text-[#7A6855] leading-relaxed">
+                                    您的訂單已寄出！請留意取貨通知 📦 若有任何問題歡迎隨時聯絡我們～
+                                </p>
+                            </div>
+                        )}
+
+                        {/* ✅ 訂單頁 - 付款方式選擇（並排兩個按鈕，已寄出則不顯示） */}
+                        {currentPage === 'order' && myOrder.status !== 'shipped' && (
+                            <div className="space-y-4">
+                                {/* 標題 */}
+                                <div className="text-center">
+                                    <p className="text-[11px] font-black text-[#6B6B6B] uppercase tracking-[0.3em]">Payment Method</p>
+                                    <p className="text-[10px] text-[#888888] font-bold mt-1">請選擇付款方式</p>
+                                </div>
+
+                                {/* 並排兩個按鈕 */}
+                                <div className="grid grid-cols-2 gap-3">
+                                    {/* 賣貨便（淺燕麥色） */}
+                                    <button 
+                                        onClick={handleGoToMyship} 
+                                        className="aspect-square bg-[#D9C8A3] text-[#5F4A2B] rounded-[2rem] font-bold flex flex-col items-center justify-center gap-2 shadow-xl active:scale-95 transition-all p-4 border border-[#C9B88A]">
+                                        <ShoppingCart size={28}/>
+                                        <span className="text-xs tracking-widest">賣貨便</span>
+                                        <span className="text-[9px] opacity-70 font-normal">取貨付款</span>
+                                    </button>
+                                    {/* 銀行轉帳（深燕麥色） */}
+                                    <button 
+                                        onClick={() => setCurrentPage('bank')}
+                                        className="aspect-square bg-[#8A7864] text-white rounded-[2rem] font-bold flex flex-col items-center justify-center gap-2 shadow-xl active:scale-95 transition-all p-4">
+                                        <CreditCard size={28}/>
+                                        <span className="text-xs tracking-widest">銀行轉帳</span>
+                                        <span className="text-[9px] opacity-70 font-normal">匯款下單</span>
+                                    </button>
+                                </div>
+
+                                {/* 通知我已下單按鈕 */}
+                                <button
+                                    onClick={handleLineReport}
+                                    className="line-btn w-full py-3.5 text-white rounded-[2rem] font-bold text-xs tracking-widest shadow-lg flex items-center justify-center gap-2 mt-2">
+                                    <MessageCircle size={14}/> 通知我已下單
+                                </button>
+                            </div>
+                        )}
+
+                        {/* ✅ 銀行轉帳頁 - 匯款資訊 + 寄件資訊 */}
+                        {currentPage === 'bank' && (
+                            <div className="space-y-4 animate-in">
+                                {/* 返回按鈕 */}
+                                <button 
+                                    onClick={() => setCurrentPage('order')}
+                                    className="flex items-center gap-1.5 text-[11px] font-bold text-[#6B6B6B] hover:text-[#3A3A3A] transition-colors">
+                                    <ArrowLeft size={12}/> 返回訂單
+                                </button>
+
+                                {/* 匯款帳號卡 */}
+                                {(storeConfig.bankName || storeConfig.bankAccount) ? (
+                                    <div className="bg-white rounded-[2rem] p-6 shadow-sm border border-[#EDE6DA] space-y-4">
+                                        <div className="flex items-center gap-2">
+                                            <CreditCard size={16} className="text-[#B8A582]"/>
+                                            <span className="font-black text-sm text-[#3A3A3A]">銀行轉帳資訊</span>
+                                        </div>
+                                        <div className="space-y-3 pt-2 border-t border-[#EDE6DA]">
+                                            {storeConfig.bankName && (
+                                                <div className="flex justify-between items-center">
+                                                    <span className="text-[11px] font-bold text-[#6B6B6B]">銀行</span>
+                                                    <span className="text-sm font-black text-[#3A3A3A]">
+                                                        {storeConfig.bankName}
+                                                        {storeConfig.bankCode && (
+                                                            <span className="text-[#888888] ml-1">({storeConfig.bankCode})</span>
+                                                        )}
+                                                    </span>
+                                                </div>
+                                            )}
+                                            {storeConfig.bankAccount && (
+                                                <div className="flex justify-between items-center gap-2">
+                                                    <span className="text-[11px] font-bold text-[#6B6B6B] shrink-0">帳號</span>
+                                                    <div className="flex items-center gap-2 min-w-0">
+                                                        <span className="serif-number text-base text-[#B8A582] truncate">
+                                                            {storeConfig.bankAccount}
+                                                        </span>
+                                                        <button
+                                                            onClick={async () => {
+                                                                try {
+                                                                    await navigator.clipboard.writeText(storeConfig.bankAccount);
+                                                                    showMessage("帳號已複製 ✅");
+                                                                } catch { showMessage("複製失敗", 'error'); }
+                                                            }}
+                                                            className="text-[10px] font-bold text-[#B8A582] bg-[#F5F1EA] px-3 py-1.5 rounded-full flex items-center gap-1 hover:bg-[#EDE6DA] shrink-0">
+                                                            <Copy size={11}/> 複製
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            )}
+                                            {storeConfig.bankHolder && (
+                                                <div className="flex justify-between items-center">
+                                                    <span className="text-[11px] font-bold text-[#6B6B6B]">戶名</span>
+                                                    <span className="text-sm font-black text-[#3A3A3A]">{storeConfig.bankHolder}</span>
+                                                </div>
+                                            )}
+                                            <div className="bg-[#EDE2CC] rounded-xl px-3 py-2 border border-[#C9B88A] mt-2">
+                                                <p className="text-[10px] text-[#8A6D3B] font-bold leading-relaxed">
+                                                    💰 匯款金額：<span className="serif-number-small text-base">${myOrder.finalTotal.toLocaleString()}</span>
+                                                </p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="bg-[#EBD5D0] rounded-2xl px-4 py-3 border border-[#D9BDB5]">
+                                        <p className="text-[11px] font-bold text-[#A05550] leading-relaxed">
+                                            ⚠️ 賣家尚未設定匯款帳號，請改用賣貨便或直接聯絡賣家
+                                        </p>
+                                    </div>
+                                )}
+
+                                {/* 寄件資訊表單 */}
+                                <div className="bg-[#F5F1EA] rounded-[2rem] p-6 border border-[#EDE6DA] space-y-4">
+                                    <div className="flex items-center gap-2">
+                                        <MapPin size={16} className="text-[#B8A582]"/>
+                                        <span className="font-black text-sm text-[#3A3A3A]">寄件資訊</span>
+                                    </div>
+
+                                    <div className="space-y-2">
+                                        <div className="relative">
+                                            <User size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#888888]"/>
+                                            <input
+                                                type="text"
+                                                value={shippingProfile.receiverName}
+                                                onChange={e => setShippingProfile(p => ({ ...p, receiverName: e.target.value }))}
+                                                placeholder="收件人姓名"
+                                                className="w-full pl-9 pr-3 py-3 bg-white rounded-2xl text-xs font-bold outline-none border border-[#DDD2BE] focus:ring-2 ring-[#EDE6DA] transition-all"
+                                            />
+                                        </div>
+                                        <div className="relative">
+                                            <Phone size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#888888]"/>
+                                            <input
+                                                type="tel"
+                                                value={shippingProfile.phone}
+                                                onChange={e => setShippingProfile(p => ({ ...p, phone: e.target.value }))}
+                                                placeholder="聯絡電話"
+                                                className="w-full pl-9 pr-3 py-3 bg-white rounded-2xl text-xs font-bold outline-none border border-[#DDD2BE] focus:ring-2 ring-[#EDE6DA] transition-all"
+                                            />
+                                        </div>
+                                        <div className="relative">
+                                            <Store size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#888888]"/>
+                                            <input
+                                                type="text"
+                                                value={shippingProfile.store}
+                                                onChange={e => setShippingProfile(p => ({ ...p, store: e.target.value }))}
+                                                placeholder="7-11 取貨門市"
+                                                className="w-full pl-9 pr-3 py-3 bg-white rounded-2xl text-xs font-bold outline-none border border-[#DDD2BE] focus:ring-2 ring-[#EDE6DA] transition-all"
+                                            />
+                                        </div>
+                                    </div>
+
+                                    <div className="text-[10px] text-[#6B6B6B] font-bold leading-relaxed">
+                                        ✨ 資料會直接送到賣家後台<br/>
+                                        下次購買會自動帶入，不用重填
+                                    </div>
+                                </div>
+
+                                {/* 完成按鈕：儲存資料 + 通知賣家 */}
+                                <button
+                                    onClick={async () => {
+                                        // 1. 儲存寄件資訊
+                                        if (!shippingProfile.receiverName.trim() || !shippingProfile.phone.trim() || !shippingProfile.store.trim()) {
+                                            showMessage("請填寫完整寄件資訊", 'warn');
+                                            return;
+                                        }
+                                        setSavingProfile(true);
+                                        try {
+                                            await setDoc(
+                                                doc(db, 'artifacts', appId, 'public', 'data', 'customerProfiles', searchName.trim()),
+                                                {
+                                                    receiverName: shippingProfile.receiverName.trim(),
+                                                    phone: shippingProfile.phone.trim(),
+                                                    store: shippingProfile.store.trim(),
+                                                    updatedAt: new Date().toISOString()
+                                                },
+                                                { merge: true }
+                                            );
+                                            // 2. 直接觸發 LINE 通知（含完整資訊）
+                                            const itemList = Object.entries(myOrder.codeGroups)
+                                                .map(([code, cg]) => `${code} x${cg.totalQty}`)
+                                                .join('、');
+                                            const msg = `Hi～我是 ${myOrder.name} 🙌\n已匯款完成囉！\n\n品項：${itemList}\n金額：$${myOrder.finalTotal}\n\n📦 寄件資訊\n收件人：${shippingProfile.receiverName.trim()}\n電話：${shippingProfile.phone.trim()}\n門市：7-11 ${shippingProfile.store.trim()}`;
+                                            const encoded = encodeURIComponent(msg);
+                                            window.open(`https://line.me/R/oaMessage/@${LINE_OA_ID}/?${encoded}`, '_blank', 'noopener,noreferrer');
+                                            showMessage("已送出寄件資訊並通知賣家 ✅");
+                                        } catch (err) {
+                                            console.error("Save profile error:", err);
+                                            showMessage("儲存失敗，請稍後再試", 'error');
+                                        } finally {
+                                            setSavingProfile(false);
+                                        }
+                                    }}
+                                    disabled={savingProfile}
+                                    className="line-btn w-full py-4 text-white rounded-[2rem] font-bold text-xs tracking-widest shadow-lg flex items-center justify-center gap-2 disabled:opacity-60">
+                                    {savingProfile ? (
+                                        <><Loader2 size={14} className="animate-spin"/> 處理中...</>
+                                    ) : (
+                                        <><Save size={14}/> 完成匯款並通知賣家</>
+                                    )}
+                                </button>
+                            </div>
+                        )}
+
+                                                {/* 溫馨提示 - 只在訂單頁顯示 */}
+                        {currentPage === 'order' && (
+                            <div className="text-center">
+                                <p className="text-[11px] text-[#6B6B6B] font-bold leading-relaxed">
+                                    💡 下單後別忘了點「通知我已下單」<br/>方便我們為您安排出貨哦 ♡
+                                </p>
+                            </div>
+                        )}
+
+                        {/* ✅ 歷史訂單區（如果有過去訂單才顯示，只在訂單頁顯示） */}
+                        {currentPage === 'order' && pastOrders.length > 0 && (
+                            <details className="bg-white/60 rounded-[2rem] p-5 border border-white/80 mt-4">
+                                <summary className="cursor-pointer flex items-center justify-between font-black text-xs text-[#555555] uppercase tracking-widest">
+                                    <span className="flex items-center gap-2">
+                                        <Calendar size={14} className="text-[#B8A582]"/>
+                                        過去訂單 ({pastOrders.length} 筆)
+                                    </span>
+                                    <ChevronRight size={14} className="text-[#888888]"/>
+                                </summary>
+                                <div className="mt-4 space-y-3">
+                                    {pastOrders.map((po, idx) => {
+                                        const statusLabel = po.status === 'shipped' ? '已寄出' : po.status === 'completed' ? '已付款' : '待對帳';
+                                        const statusColor = po.status === 'shipped' ? 'text-[#7A6855]' : po.status === 'completed' ? 'text-[#6B7A4A]' : 'text-[#8A7864]';
+                                        return (
+                                            <div key={idx} className="bg-[#F5F1EA] rounded-2xl p-4 border border-[#EDE6DA]">
+                                                <div className="flex justify-between items-start mb-2">
+                                                    <div className="flex-1">
+                                                        <div className="text-[11px] font-bold text-[#6B6B6B] italic">
+                                                            <Calendar size={10} className="inline mr-1"/>
+                                                            {po.date && po.date.seconds ? 
+                                                                new Date(po.date.seconds * 1000).toLocaleDateString('zh-TW', { year: 'numeric', month: '2-digit', day: '2-digit' }) 
+                                                                : '?'
+                                                            }
+                                                        </div>
+                                                        <div className={`text-[10px] font-black ${statusColor} mt-0.5`}>
+                                                            {statusLabel}
+                                                        </div>
+                                                    </div>
+                                                    <div className="serif-number text-xl text-[#B8A582]">
+                                                        ${po.finalTotal.toLocaleString()}
+                                                    </div>
+                                                </div>
+                                                <div className="space-y-1 pt-2 border-t border-dashed border-[#DDD2BE]">
+                                                    {Object.entries(po.codeGroups).map(([code, cg]) => {
+                                                        const productName = getProductName(code);
+                                                        return (
+                                                            <div key={code} className="flex justify-between items-center text-[11px]">
+                                                                <span className="font-bold text-[#3A3A3A]">
+                                                                    {code}
+                                                                    {productName && <span className="text-[#888888] font-normal ml-1">· {productName}</span>}
+                                                                </span>
+                                                                <span className="text-[#6B6B6B] font-bold">×{cg.totalQty}</span>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                                <p className="text-[10px] text-[#888888] font-bold mt-3 text-center">
+                                    💎 感謝您持續支持 ♡
+                                </p>
+                            </details>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="bg-white/40 p-12 rounded-[3rem] border border-white border-dashed text-center space-y-3">
+                          <AlertTriangle size={24} className="mx-auto text-[#888888]"/>
+                          <p className="text-[#555555] font-bold text-sm">查無符合此暱稱的訂單</p>
+                          <p className="text-[11px] text-[#6B6B6B] font-bold">請確認名稱是否與社群一致</p>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <ShopTab
+                    productsLoaded={productsLoaded} liveProducts={liveProducts} shownProducts={shownProducts}
+                    categories={categories} activeCat={activeCat} setActiveCat={setActiveCat}
+                    shopSearch={shopSearch} setShopSearch={setShopSearch}
+                    setDetailProduct={setDetailProduct} startAdd={startAdd} cartItems={cartItems}
+                    parseOptions={parseOptions}
+                  />
+                )}
+              </main>
+
+              {/* 底部購物車列（僅選購分頁、有商品時） */}
+              {isLoggedIn && tab === 'shop' && cartCount > 0 && !adminMode && (
+                <div className="fixed bottom-0 left-0 right-0 z-40 p-4 bg-[#FAF7F2]/95 backdrop-blur-md border-t border-[#EDE6DA]">
+                    <div className="max-w-md mx-auto flex items-center gap-3">
+                        <div className="flex-1">
+                            <div className="text-[10px] font-bold text-[#6B6B6B] uppercase tracking-wider">共 {cartCount} 件</div>
+                            <div className="serif-number text-2xl text-[#B8A582] leading-none">${cartTotal.toLocaleString()}</div>
+                        </div>
+                        <button onClick={openConfirm}
+                            className="px-8 py-4 bg-[#333] text-white rounded-2xl text-sm font-black shadow-lg active:scale-95 transition-all flex items-center gap-2">
+                            <ShoppingCart size={16}/> 確認訂單
+                        </button>
+                    </div>
+                </div>
+              )}
+
+              {/* 商品詳情 Modal */}
+              {detailProduct && (
+                <div className="fixed inset-0 z-[82] flex items-end justify-center bg-stone-900/60 backdrop-blur-sm animate-in" onClick={() => setDetailProduct(null)}>
+                    <div className="bg-white w-full max-w-md rounded-t-[2.5rem] max-h-[92vh] overflow-y-auto scrollbar-hide" onClick={e => e.stopPropagation()}>
+                        <div className="relative">
+                            <div className="aspect-square bg-[#F5F1EA] flex items-center justify-center overflow-hidden">
+                                {detailProduct.image ? <img src={detailProduct.image} alt={detailProduct.name} className="w-full h-full object-cover"/> : <ShoppingBag size={48} className="text-[#C9BCA8]"/>}
+                            </div>
+                            <button onClick={() => setDetailProduct(null)} className="absolute top-4 right-4 w-9 h-9 rounded-full bg-white/90 flex items-center justify-center shadow-md text-[#555]"><X size={18}/></button>
+                            {detailProduct.category && <span className="absolute top-4 left-4 bg-white/90 text-[#8A6D3B] text-[11px] font-black px-3 py-1 rounded-full shadow-sm">{detailProduct.category}</span>}
+                        </div>
+                        <div className="p-6 space-y-3">
+                            <div>
+                                <h3 className="text-lg font-black text-[#3A3A3A]">{detailProduct.name}</h3>
+                                {detailProduct.code && <div className="text-[11px] text-[#888] font-bold mt-0.5">代碼 {detailProduct.code}</div>}
+                            </div>
+                            <div className="serif-number text-3xl text-[#B8A582]">${Number(detailProduct.price).toLocaleString()}</div>
+                            {(parseOptions(detailProduct.sizes).length > 0 || parseOptions(detailProduct.colors).length > 0) && (
+                                <div className="flex flex-wrap gap-1.5">
+                                    {[...parseOptions(detailProduct.sizes), ...parseOptions(detailProduct.colors)].map((o, i) => (
+                                        <span key={i} className="bg-[#F5F1EA] text-[#555] text-[11px] font-bold px-3 py-1.5 rounded-lg">{o}</span>
+                                    ))}
+                                </div>
+                            )}
+                            {detailProduct.desc && <p className="text-[12px] text-[#6B6B6B] font-medium leading-relaxed whitespace-pre-wrap pt-1">{detailProduct.desc}</p>}
+                            <button onClick={() => { const p = detailProduct; setDetailProduct(null); startAdd(p); }} className="w-full py-4 bg-[#333] text-white rounded-2xl text-sm font-black active:scale-95 transition-all flex items-center justify-center gap-2 mt-2">
+                                <Plus size={16}/> 選購
+                            </button>
+                        </div>
+                    </div>
+                </div>
+              )}
+
+              {/* 規格選擇 Modal */}
+              {specModal && (
+                <div className="fixed inset-0 z-[80] flex items-end justify-center bg-stone-900/50 backdrop-blur-sm animate-in" onClick={() => setSpecModal(null)}>
+                    <div className="bg-white w-full max-w-md rounded-t-[2.5rem] p-6 pb-8 space-y-5" onClick={e => e.stopPropagation()}>
+                        <div className="w-9 h-1 bg-[#EDE6DA] rounded-full mx-auto"/>
+                        <div className="flex items-center gap-3">
+                            <div className="w-16 h-16 rounded-2xl bg-[#F5F1EA] overflow-hidden flex items-center justify-center shrink-0">
+                                {specModal.product.image ? <img src={specModal.product.image} className="w-full h-full object-cover"/> : <ShoppingBag size={22} className="text-[#C9BCA8]"/>}
+                            </div>
+                            <div className="min-w-0">
+                                <div className="font-black text-sm text-[#3A3A3A] truncate">{specModal.product.name}</div>
+                                <div className="serif-number text-lg text-[#B8A582]">${Number(specModal.product.price).toLocaleString()}</div>
+                            </div>
+                        </div>
+                        {parseOptions(specModal.product.sizes).length > 0 && (
+                            <div className="space-y-2">
+                                <label className="text-[11px] font-black text-[#6B6B6B] uppercase tracking-wider">尺寸</label>
+                                <div className="flex flex-wrap gap-2">
+                                    {parseOptions(specModal.product.sizes).map(s => (
+                                        <button key={s} onClick={() => setPickSize(s)} className={`px-4 py-2.5 rounded-xl text-[13px] font-bold transition-all ${pickSize === s ? 'bg-[#333] text-white shadow-md' : 'bg-[#F5F1EA] text-[#555]'}`}>{s}</button>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                        {parseOptions(specModal.product.colors).length > 0 && (
+                            <div className="space-y-2">
+                                <label className="text-[11px] font-black text-[#6B6B6B] uppercase tracking-wider">顏色</label>
+                                <div className="flex flex-wrap gap-2">
+                                    {parseOptions(specModal.product.colors).map(c => (
+                                        <button key={c} onClick={() => setPickColor(c)} className={`px-4 py-2.5 rounded-xl text-[13px] font-bold transition-all ${pickColor === c ? 'bg-[#333] text-white shadow-md' : 'bg-[#F5F1EA] text-[#555]'}`}>{c}</button>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                        <button onClick={confirmSpec} className="w-full py-4 bg-[#B8A582] text-white rounded-2xl text-sm font-black active:scale-95 transition-all flex items-center justify-center gap-2 shadow-md">
+                            <Plus size={16}/> 加入
+                        </button>
+                    </div>
+                </div>
+              )}
+
+              {/* 確認訂單 Modal */}
+              {showConfirm && (
+                <div className="fixed inset-0 z-[85] flex items-end justify-center bg-stone-900/50 backdrop-blur-sm animate-in" onClick={() => !submitting && setShowConfirm(false)}>
+                    <div className="bg-white w-full max-w-md rounded-t-[2.5rem] p-6 pb-8 max-h-[88vh] overflow-y-auto scrollbar-hide" onClick={e => e.stopPropagation()}>
+                        <div className="w-9 h-1 bg-[#EDE6DA] rounded-full mx-auto mb-5"/>
+                        <div className="flex items-center justify-between mb-4">
+                            <h3 className="text-lg font-black text-[#3A3A3A]">確認您的訂單</h3>
+                            <button onClick={() => !submitting && setShowConfirm(false)} className="text-[#888]"><X size={20}/></button>
+                        </div>
+                        <div className="bg-[#F5F1EA] rounded-2xl px-4 py-3 mb-4 flex items-center gap-2">
+                            <User size={14} className="text-[#B8A582]"/>
+                            <span className="text-[13px] font-bold text-[#3A3A3A]">{searchName.trim()}</span>
+                        </div>
+                        <div className="space-y-3 mb-4">
+                            {cartItems.map((item, idx) => {
+                                const key = `${item.product.id}__${item.spec}`;
+                                return (
+                                    <div key={idx} className="flex items-center gap-3 bg-white rounded-2xl p-3 border border-[#EDE6DA]">
+                                        <div className="w-14 h-14 rounded-xl bg-[#F5F1EA] overflow-hidden flex items-center justify-center shrink-0">
+                                            {item.product.image ? <img src={item.product.image} className="w-full h-full object-cover"/> : <ShoppingBag size={18} className="text-[#C9BCA8]"/>}
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                            <div className="font-bold text-[13px] text-[#3A3A3A] truncate">{item.product.name}</div>
+                                            {item.spec && <div className="text-[11px] text-[#888] font-bold">{item.spec}</div>}
+                                            <div className="serif-number text-[15px] text-[#B8A582]">${Number(item.product.price).toLocaleString()}</div>
+                                        </div>
+                                        <div className="flex items-center gap-2 shrink-0">
+                                            <button onClick={() => changeQty(key, -1)} className="w-7 h-7 rounded-full bg-[#F5F1EA] flex items-center justify-center text-[#555] active:scale-90"><Minus size={14}/></button>
+                                            <span className="font-black text-sm w-5 text-center">{item.qty}</span>
+                                            <button onClick={() => changeQty(key, 1)} className="w-7 h-7 rounded-full bg-[#333] flex items-center justify-center text-white active:scale-90"><Plus size={14}/></button>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                        <div className="flex justify-between items-end pt-4 border-t border-dashed border-[#DDD2BE] mb-5">
+                            <span className="text-[11px] font-black text-[#6B6B6B] uppercase tracking-[0.2em] mb-1">合計</span>
+                            <span className="serif-number text-4xl text-[#B8A582] leading-none">${cartTotal.toLocaleString()}</span>
+                        </div>
+                        <div className="bg-[#EDE2CC] rounded-xl px-4 py-2.5 mb-4 border border-[#C9B88A]">
+                            <p className="text-[10px] text-[#8A6D3B] font-bold leading-relaxed">💡 送出後可在「我的訂單」查看，運費與優惠將由賣家為您結算</p>
+                        </div>
+                        <button onClick={submitOrder} disabled={submitting} className="w-full py-4 bg-[#333] text-white rounded-2xl text-sm font-black active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-60">
+                            {submitting ? <><Loader2 size={16} className="animate-spin"/> 送出中...</> : <><Check size={16}/> 確認送出訂單</>}
+                        </button>
+                    </div>
+                </div>
+              )}
+
+              {/* 管理區 */}
+              {adminMode && (
+                <AdminArea
+                    products={products} unlocked={adminUnlocked} pinInput={pinInput} setPinInput={setPinInput}
+                    tryUnlock={tryUnlock} onExit={() => { setAdminMode(false); setAdminUnlocked(false); }}
+                    showMessage={showMessage}
+                />
+              )}
+              <div className="fixed bottom-2 w-full text-center opacity-10 text-[9px] font-bold tracking-widest pointer-events-none text-[#3A3A3A]">v2.0 ALL-IN-ONE</div>
+            </div>
+          );
+        };
+
+        // ═══ 選購分頁元件 ═══
+        const ShopTab = ({ productsLoaded, liveProducts, shownProducts, categories, activeCat, setActiveCat, shopSearch, setShopSearch, setDetailProduct, startAdd, cartItems, parseOptions }) => {
+            if (!productsLoaded) return (
+                <div className="text-center py-16"><Loader2 size={26} className="mx-auto text-[#B8A582] animate-spin"/><p className="text-xs font-bold text-[#6B6B6B] mt-3 pulse-soft">載入商品中...</p></div>
+            );
+            if (liveProducts.length === 0) return (
+                <div className="text-center py-16 text-[#6B6B6B]"><Package size={30} className="mx-auto mb-3 text-[#C9BCA8]"/><p className="text-xs font-bold">目前沒有主打商品，敬請期待 ♡</p></div>
+            );
+            return (
+                <div className="space-y-5 animate-in">
+                    <div className="relative">
+                        <Search size={15} className="absolute left-4 top-1/2 -translate-y-1/2 text-[#B8A582]"/>
+                        <input value={shopSearch} onChange={e => setShopSearch(e.target.value)} placeholder="搜尋商品名稱或代碼..."
+                            className="w-full pl-11 pr-10 py-3 bg-white rounded-full text-[13px] font-bold outline-none focus:ring-2 ring-[#EDE6DA] border border-white shadow-sm"/>
+                        {shopSearch && <button onClick={() => setShopSearch('')} className="absolute right-4 top-1/2 -translate-y-1/2 text-[#888]"><X size={15}/></button>}
+                    </div>
+                    {categories.length > 1 && (
+                        <div className="flex gap-2 overflow-x-auto scrollbar-hide -mx-1 px-1 py-1">
+                            {categories.map(cat => (
+                                <button key={cat} onClick={() => setActiveCat(cat)} className={`shrink-0 px-4 py-2 rounded-full text-[12px] font-black transition-all ${activeCat === cat ? 'bg-[#333] text-white shadow-md' : 'bg-white text-[#888] border border-[#EDE6DA]'}`}>{cat}</button>
+                            ))}
+                        </div>
+                    )}
+                    {shownProducts.length === 0 ? (
+                        <div className="text-center py-14 text-[#6B6B6B]"><Search size={26} className="mx-auto mb-2 text-[#C9BCA8]"/><p className="text-xs font-bold">找不到符合的商品</p></div>
+                    ) : (
+                        <div className="grid grid-cols-2 gap-4">
+                            {shownProducts.map(p => {
+                                const inCart = cartItems.filter(i => i.product.id === p.id).reduce((s, i) => s + i.qty, 0);
+                                return (
+                                    <div key={p.id} className="bg-white rounded-[1.5rem] overflow-hidden shadow-sm border border-white flex flex-col">
+                                        <button onClick={() => setDetailProduct(p)} className="aspect-square bg-[#F5F1EA] flex items-center justify-center overflow-hidden relative">
+                                            {p.image ? <img src={p.image} alt={p.name} className="w-full h-full object-cover"/> : <ShoppingBag size={32} className="text-[#C9BCA8]"/>}
+                                            {p.category && <span className="absolute top-2 left-2 bg-white/85 text-[#8A6D3B] text-[9px] font-black px-2 py-0.5 rounded-full">{p.category}</span>}
+                                        </button>
+                                        <div className="p-3 flex-1 flex flex-col">
+                                            <button onClick={() => setDetailProduct(p)} className="text-left font-bold text-[13px] text-[#3A3A3A] leading-tight line-clamp-2">{p.name}</button>
+                                            {(parseOptions(p.sizes).length > 0 || parseOptions(p.colors).length > 0) && (
+                                                <div className="text-[10px] text-[#888] font-bold mt-0.5">{[...parseOptions(p.sizes), ...parseOptions(p.colors)].join(' · ')}</div>
+                                            )}
+                                            <div className="serif-number text-lg text-[#B8A582] mt-1.5">${Number(p.price).toLocaleString()}</div>
+                                            <button onClick={() => startAdd(p)} className="mt-2 w-full py-2.5 bg-[#B8A582] text-white rounded-xl text-[12px] font-black flex items-center justify-center gap-1 active:scale-95 transition-all shadow-sm">
+                                                <Plus size={14}/> {inCart > 0 ? `已選 ${inCart}` : '選購'}
+                                            </button>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        // ═══ 管理區元件 ═══
+        const AdminArea = ({ products, unlocked, pinInput, setPinInput, tryUnlock, onExit, showMessage }) => {
+            const [form, setForm] = useState({ name: '', code: '', price: '', category: '', sizes: '', colors: '', desc: '' });
+            const [imgData, setImgData] = useState('');
+            const [uploading, setUploading] = useState(false);
+            const [saving, setSaving] = useState(false);
+
+            const handleFile = async (file) => {
+                if (!file) return;
+                setUploading(true);
+                try { setImgData(await resizeImage(file)); } catch { showMessage('圖片處理失敗', 'error'); }
+                finally { setUploading(false); }
+            };
+            const addProduct = async () => {
+                if (!form.name.trim()) { showMessage('請填商品名稱', 'warn'); return; }
+                if (!form.price) { showMessage('請填價格', 'warn'); return; }
+                setSaving(true);
+                try {
+                    await addDoc(productsCol(), {
+                        name: form.name.trim(), code: form.code.trim().toUpperCase(), price: String(form.price).trim(),
+                        category: form.category.trim(), sizes: form.sizes.trim(), colors: form.colors.trim(),
+                        desc: form.desc.trim(), image: imgData || '', active: true, createdAt: Date.now()
+                    });
+                    setForm({ name: '', code: '', price: '', category: '', sizes: '', colors: '', desc: '' });
+                    setImgData('');
+                    showMessage('商品已上架 ✅');
+                } catch (err) { console.error(err); showMessage('上架失敗（圖片可能太大）', 'error'); }
+                finally { setSaving(false); }
+            };
+            const toggleActive = async (p) => { await updateDoc(productDoc(p.id), { active: p.active === false }); showMessage(p.active === false ? '已開放選購' : '已停止選購'); };
+            const removeProduct = async (p) => { if (!confirm(`確定刪除「${p.name}」？`)) return; await deleteDoc(productDoc(p.id)); showMessage('已刪除'); };
+
+            if (!unlocked) {
+                return (
+                    <div className="fixed inset-0 z-[90] bg-[#FAF7F2] flex flex-col items-center justify-center p-6">
+                        <Lock size={26} className="text-[#B8A582] mb-4"/>
+                        <h2 className="text-lg font-black text-[#3A3A3A] mb-1">商品管理</h2>
+                        <p className="text-[11px] text-[#6B6B6B] font-bold mb-6">請輸入管理密碼</p>
+                        <input type="password" value={pinInput} onChange={e => setPinInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && tryUnlock()} placeholder="PIN"
+                            className="w-full max-w-[240px] py-4 rounded-2xl text-center text-lg font-black tracking-widest bg-white outline-none focus:ring-2 ring-[#EDE6DA] mb-4 shadow-sm"/>
+                        <button onClick={tryUnlock} className="w-full max-w-[240px] py-4 bg-[#333] text-white rounded-2xl text-xs font-bold tracking-widest active:scale-95 transition-all">解鎖</button>
+                        <button onClick={onExit} className="mt-4 text-[12px] font-bold text-[#B8A582] underline flex items-center gap-1"><ArrowLeft size={13}/> 返回</button>
+                    </div>
+                );
+            }
+            const active = products.filter(p => p.active !== false);
+            const inactive = products.filter(p => p.active === false);
+            const existingCats = Array.from(new Set(products.map(p => (p.category || '').trim()).filter(Boolean)));
+
+            return (
+                <div className="fixed inset-0 z-[90] bg-[#FAF7F2] overflow-y-auto">
+                    <header className="p-5 sticky top-0 z-30 bg-[#FAF7F2]/90 backdrop-blur-md border-b border-white flex items-center justify-between">
+                        <div>
+                            <h1 className="text-xl font-black text-[#3A3A3A] flex items-center gap-2"><Settings size={18} className="text-[#B8A582]"/> 商品管理</h1>
+                            <p className="text-[10px] text-[#888] font-bold mt-0.5">上架的商品會出現在選購分頁</p>
+                        </div>
+                        <button onClick={onExit} className="text-[12px] font-bold text-[#B8A582] underline flex items-center gap-1"><ArrowLeft size={13}/> 返回</button>
+                    </header>
+                    <div className="p-5 max-w-md mx-auto space-y-5">
+                        <div className="bg-white rounded-[2rem] p-6 shadow-sm border border-white space-y-4">
+                            <h3 className="font-black text-sm text-[#3A3A3A] flex items-center gap-2"><Plus size={16} className="text-[#B8A582]"/> 上架新商品</h3>
+                            <label className="block cursor-pointer">
+                                <input type="file" accept="image/*" className="hidden" onChange={e => e.target.files[0] && handleFile(e.target.files[0])}/>
+                                <div className={`rounded-2xl border-2 border-dashed flex items-center justify-center overflow-hidden transition-all ${imgData ? 'border-[#B8A582]' : 'border-[#DDD2BE]'}`} style={{ aspectRatio: imgData ? 'auto' : '16/9' }}>
+                                    {uploading ? <div className="py-10 text-center"><Loader2 size={24} className="mx-auto text-[#B8A582] animate-spin"/><p className="text-[11px] font-bold text-[#888] mt-2">壓縮中...</p></div>
+                                        : imgData ? <img src={imgData} className="w-full object-cover"/>
+                                        : <div className="py-10 text-center"><Camera size={26} className="mx-auto text-[#C9BCA8]"/><p className="text-[12px] font-bold text-[#888] mt-2">點此上傳商品圖（手機相簿）</p><p className="text-[10px] text-[#C9BCA8] mt-1">系統會自動壓縮，一個商品一張</p></div>}
+                                </div>
+                            </label>
+                            {imgData && <button onClick={() => setImgData('')} className="text-[11px] font-bold text-[#B55550] underline flex items-center gap-1"><Trash2 size={12}/> 移除圖片</button>}
+                            <div className="space-y-3">
+                                <div><label className="text-[11px] font-black text-[#6B6B6B] uppercase tracking-wider">商品名稱 *</label>
+                                    <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="例：法式碎花洋裝" className="w-full mt-1 py-3 px-4 bg-[#F5F1EA] rounded-xl text-sm font-bold outline-none focus:ring-2 ring-[#EDE6DA]"/></div>
+                                <div className="grid grid-cols-2 gap-3">
+                                    <div><label className="text-[11px] font-black text-[#6B6B6B] uppercase tracking-wider">代碼</label>
+                                        <input value={form.code} onChange={e => setForm(f => ({ ...f, code: e.target.value.toUpperCase() }))} placeholder="A01" className="w-full mt-1 py-3 px-4 bg-[#F5F1EA] rounded-xl text-sm font-bold outline-none focus:ring-2 ring-[#EDE6DA]"/></div>
+                                    <div><label className="text-[11px] font-black text-[#6B6B6B] uppercase tracking-wider">價格 *</label>
+                                        <input type="number" value={form.price} onChange={e => setForm(f => ({ ...f, price: e.target.value }))} placeholder="890" className="w-full mt-1 py-3 px-4 bg-[#F5F1EA] rounded-xl text-sm font-bold outline-none focus:ring-2 ring-[#EDE6DA]"/></div>
+                                </div>
+                                <div><label className="text-[11px] font-black text-[#6B6B6B] uppercase tracking-wider">分類標籤（選填）</label>
+                                    <input value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))} placeholder="例：新品 / 上衣 / 洋裝" className="w-full mt-1 py-3 px-4 bg-[#F5F1EA] rounded-xl text-sm font-bold outline-none focus:ring-2 ring-[#EDE6DA]"/>
+                                    {existingCats.length > 0 && <div className="flex flex-wrap gap-1.5 mt-2">{existingCats.map(c => <button key={c} type="button" onClick={() => setForm(f => ({ ...f, category: c }))} className="px-3 py-1 bg-[#F5F1EA] text-[#8A6D3B] text-[11px] font-bold rounded-full border border-[#EDE6DA]">{c}</button>)}</div>}
+                                </div>
+                                <div><label className="text-[11px] font-black text-[#6B6B6B] uppercase tracking-wider">尺寸（用 / 分隔，選填）</label>
+                                    <input value={form.sizes} onChange={e => setForm(f => ({ ...f, sizes: e.target.value }))} placeholder="S/M/L" className="w-full mt-1 py-3 px-4 bg-[#F5F1EA] rounded-xl text-sm font-bold outline-none focus:ring-2 ring-[#EDE6DA]"/></div>
+                                <div><label className="text-[11px] font-black text-[#6B6B6B] uppercase tracking-wider">顏色（用 / 分隔，選填）</label>
+                                    <input value={form.colors} onChange={e => setForm(f => ({ ...f, colors: e.target.value }))} placeholder="奶白/黑/焦糖" className="w-full mt-1 py-3 px-4 bg-[#F5F1EA] rounded-xl text-sm font-bold outline-none focus:ring-2 ring-[#EDE6DA]"/></div>
+                                <div><label className="text-[11px] font-black text-[#6B6B6B] uppercase tracking-wider">商品說明（選填）</label>
+                                    <textarea value={form.desc} onChange={e => setForm(f => ({ ...f, desc: e.target.value }))} placeholder="材質、版型、尺寸建議..." rows={3} className="w-full mt-1 py-3 px-4 bg-[#F5F1EA] rounded-xl text-sm font-bold outline-none focus:ring-2 ring-[#EDE6DA] resize-none"/></div>
+                            </div>
+                            <button onClick={addProduct} disabled={saving || uploading} className="w-full py-4 bg-[#333] text-white rounded-2xl text-sm font-black active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-60">
+                                {saving ? <><Loader2 size={16} className="animate-spin"/> 上架中...</> : <><Plus size={16}/> 確認上架</>}
+                            </button>
+                        </div>
+                        {active.length > 0 && <div className="space-y-2"><div className="text-[11px] font-black text-[#B8A582] uppercase tracking-wider px-1">選購中（{active.length}）</div>{active.map(p => <AdminProductRow key={p.id} p={p} onToggle={toggleActive} onRemove={removeProduct} parseOptions={parseOptions}/>)}</div>}
+                        {inactive.length > 0 && <div className="space-y-2"><div className="text-[11px] font-black text-[#888] uppercase tracking-wider px-1">已停售（{inactive.length}）</div>{inactive.map(p => <AdminProductRow key={p.id} p={p} onToggle={toggleActive} onRemove={removeProduct} parseOptions={parseOptions}/>)}</div>}
+                        {products.length === 0 && <div className="text-center py-12 text-[#6B6B6B]"><Package size={28} className="mx-auto mb-2 text-[#C9BCA8]"/><p className="text-xs font-bold">還沒有商品，上架第一件吧！</p></div>}
+                    </div>
+                </div>
+            );
+        };
+
+        const AdminProductRow = ({ p, onToggle, onRemove, parseOptions }) => {
+            const isActive = p.active !== false;
+            const copyLink = () => {
+                const base = window.location.origin + window.location.pathname;
+                const link = `${base}?product=${p.id}`;
+                const done = () => alert('商品連結已複製！可直接貼給客人：\n\n' + link);
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(link).then(done).catch(() => {
+                        prompt('複製此連結貼給客人：', link);
+                    });
+                } else {
+                    prompt('複製此連結貼給客人：', link);
+                }
+            };
+            return (
+                <div className="bg-white rounded-2xl p-3 shadow-sm border border-white flex items-center gap-3" style={{ opacity: isActive ? 1 : 0.55 }}>
+                    <div className="w-14 h-14 rounded-xl bg-[#F5F1EA] overflow-hidden flex items-center justify-center shrink-0">
+                        {p.image ? <img src={p.image} className="w-full h-full object-cover"/> : <ShoppingBag size={18} className="text-[#C9BCA8]"/>}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                        <div className="font-bold text-[13px] text-[#3A3A3A] truncate">{p.name}</div>
+                        <div className="text-[11px] text-[#888] font-bold">{p.code ? `${p.code} · ` : ''}${Number(p.price).toLocaleString()}</div>
+                        {(parseOptions(p.sizes).length > 0 || parseOptions(p.colors).length > 0) && <div className="text-[10px] text-[#B8A582] font-bold mt-0.5 truncate">{[...parseOptions(p.sizes), ...parseOptions(p.colors)].join(' · ')}</div>}
+                        <button onClick={copyLink} className="mt-1.5 px-2.5 py-1 rounded-lg text-[10px] font-black bg-[#EFE9DD] text-[#8A6D3B] flex items-center gap-1 w-fit"><ExternalLink size={10}/> 複製商品連結</button>
+                    </div>
+                    <div className="flex flex-col gap-1.5 shrink-0">
+                        <button onClick={() => onToggle(p)} className={`px-3 py-1.5 rounded-lg text-[11px] font-black flex items-center gap-1 ${isActive ? 'bg-[#EDE6DA] text-[#7A6855]' : 'bg-[#E8EBE0] text-[#5F6B42]'}`}>{isActive ? <><EyeOff size={11}/> 停售</> : <><Eye size={11}/> 開賣</>}</button>
+                        <button onClick={() => onRemove(p)} className="px-3 py-1.5 rounded-lg text-[11px] font-black bg-[#F7EAE8] text-[#B55550] flex items-center gap-1"><Trash2 size={11}/> 刪除</button>
+                    </div>
+                </div>
+            );
+        };
+
+        createRoot(document.getElementById('root')).render(<App />);
+    </script>
+</body>
+</html>
