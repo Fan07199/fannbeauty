@@ -5,10 +5,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <!-- 版本標記：v5.0.0 ( 官網／後台分離：商品管理移至 admin.html，買家頁不再有管理入口 ) -->
     <title>Fann.Beauty｜選購 · 查詢訂單</title>
-    
-    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- ✅ 效能優化：提早跟外部服務建立連線，縮短實際載入資源時的等待時間 -->
+    <link rel="preconnect" href="https://esm.sh" crossorigin>
+    <link rel="preconnect" href="https://www.gstatic.com" crossorigin>
+    <link rel="preconnect" href="https://unpkg.com" crossorigin>
+    <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="preconnect" href="https://firestore.googleapis.com" crossorigin>
+
+    <!-- ✅ 效能優化：加 defer，避免這兩個較大的指令碼卡住頁面初始畫面顯示 -->
+    <script src="https://cdn.tailwindcss.com" defer></script>
     <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400..900;1,400..900&family=DM+Serif+Display:ital@0;1&family=Cormorant+Garamond:wght@400;500;600;700&family=Noto+Sans+TC:wght@400;500;700;900&display=swap" rel="stylesheet">
-    
+
     <script type="importmap">
     {
       "imports": {
@@ -21,7 +30,7 @@
       }
     }
     </script>
-    <script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone@7/babel.min.js" defer></script>
     <style>
         body { font-family: 'Noto Sans TC', sans-serif; -webkit-tap-highlight-color: transparent; background-color: #FAF7F2; color: #3A3A3A; }
         .scrollbar-hide::-webkit-scrollbar { display: none; }
