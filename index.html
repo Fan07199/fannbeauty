@@ -128,8 +128,8 @@
             const verifier = generateRandomString(64);
             const challenge = base64UrlEncode(await sha256Buffer(verifier));
             const state = generateRandomString(24);
-            sessionStorage.setItem(LINE_PKCE_VERIFIER_KEY, verifier);
-            sessionStorage.setItem(LINE_OAUTH_STATE_KEY, state);
+            localStorage.setItem(LINE_PKCE_VERIFIER_KEY, verifier);
+            localStorage.setItem(LINE_OAUTH_STATE_KEY, state);
             const params = new URLSearchParams({
                 response_type: 'code',
                 client_id: LINE_LOGIN_CHANNEL_ID,
@@ -323,10 +323,10 @@
             const code = params.get('code');
             const state = params.get('state');
             if (!code || !state) return;
-            const savedState = sessionStorage.getItem(LINE_OAUTH_STATE_KEY);
-            const verifier = sessionStorage.getItem(LINE_PKCE_VERIFIER_KEY);
-            sessionStorage.removeItem(LINE_OAUTH_STATE_KEY);
-            sessionStorage.removeItem(LINE_PKCE_VERIFIER_KEY);
+            const savedState = localStorage.getItem(LINE_OAUTH_STATE_KEY);
+            const verifier = localStorage.getItem(LINE_PKCE_VERIFIER_KEY);
+            localStorage.removeItem(LINE_OAUTH_STATE_KEY);
+            localStorage.removeItem(LINE_PKCE_VERIFIER_KEY);
             // 清掉網址上的 code/state，避免重新整理時重複觸發
             window.history.replaceState({}, '', window.location.origin + window.location.pathname);
             if (!savedState || state !== savedState || !verifier) {
