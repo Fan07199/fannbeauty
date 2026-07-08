@@ -227,9 +227,15 @@
               try { return (new URLSearchParams(window.location.search).get('product') || '').trim(); }
               catch { return ''; }
           })();
+          const NAME_KEY = 'fann-shop-name';
+          // ✅ 記住登入：關掉瀏覽器重開，只要之前登入過就自動帶入名字，不用重新輸入/重新 LINE 登入
+          const _savedName = (() => {
+              try { return (localStorage.getItem(NAME_KEY) || '').trim(); }
+              catch { return ''; }
+          })();
           const [user, setUser] = useState(null);
-          const [isLoggedIn, setIsLoggedIn] = useState(!!_urlName);
-          const [searchName, setSearchName] = useState(_urlName);
+          const [isLoggedIn, setIsLoggedIn] = useState(!!_urlName || !!_savedName);
+          const [searchName, setSearchName] = useState(_urlName || _savedName);
           const [orders, setOrders] = useState([]);
           const [archivedOrders, setArchivedOrders] = useState([]); // ✅ 新增：歷史歸檔
           const [storeConfig, setStoreConfig] = useState({ myshipUrl: '', freeShippingThreshold: 1500, shippingFee: 38 });
@@ -253,7 +259,6 @@
           const [pendingAdd, setPendingAdd] = useState(null); // 未登入時想加入的商品，登入後補加
           const [justOrdered, setJustOrdered] = useState(null); // ✅ 剛下單的摘要，用於「通知賣家」橫幅
           const [wantOrders, setWantOrders] = useState(false); // ✅ 未登入點「我的訂單」→ 登入後自動切過去
-          const NAME_KEY = 'fann-shop-name';
           const [products, setProducts] = useState([]);
           const [productsLoaded, setProductsLoaded] = useState(false);
           const [cart, setCart] = useState({}); // { productId__spec: {product, spec, qty} }
