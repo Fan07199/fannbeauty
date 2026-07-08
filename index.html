@@ -73,7 +73,7 @@
         import React, { useState, useEffect, useMemo, useRef } from 'react';
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
-        import { getFirestore, collection, doc, onSnapshot, setDoc, writeBatch, serverTimestamp } from 'firebase/firestore';
+        import { getFirestore, collection, doc, onSnapshot, setDoc, writeBatch, serverTimestamp, query, where, getDocs } from 'firebase/firestore';
         import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
         import { Search, ChevronRight, MessageCircle, Truck, CheckCircle2, AlertTriangle, Calendar, Loader2, Package, Gift, CreditCard, Copy, MapPin, User, Phone, Store, Save, ArrowLeft, ArrowRight, ShoppingCart, ShoppingBag, Tag, Plus, Minus, X, Check, Send } from 'lucide-react';
 
@@ -95,6 +95,69 @@
         // ✅ v4.3: 動態運費改由 storeConfig.shippingFee 提供（移除寫死 SHIPPING_FEE）
         // ✅ 官方 LINE ID
         const LINE_OA_ID = "533krnmt";
+
+        // ─── LINE Login（客人綁定登入，讓賣家看得到真實身份）──────────
+        // ✅ LINE Login 頻道（Web app），採 Authorization Code + PKCE，不需要 Channel Secret
+        const LINE_LOGIN_CHANNEL_ID = '2008606040';
+        const LINE_LOGIN_REDIRECT_URI = 'https://fann-beauty-erp.vercel.app/';
+        const LINE_PKCE_VERIFIER_KEY = 'fann-line-pkce-verifier';
+        const LINE_OAUTH_STATE_KEY = 'fann-line-oauth-state';
+
+        const base64UrlEncode = (buffer) => {
+            return btoa(String.fromCharCode(...new Uint8Array(buffer)))
+                .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        };
+        const generateRandomString = (length = 64) => {
+            const arr = new Uint8Array(length);
+            crypto.getRandomValues(arr);
+            return base64UrlEncode(arr.buffer).slice(0, length);
+        };
+        const sha256Buffer = async (text) => {
+            return await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+        };
+        const decodeJwtPayload = (token) => {
+            const payload = token.split('.')[1];
+            const json = decodeURIComponent(
+                atob(payload.replace(/-/g, '+').replace(/_/g, '/'))
+                    .split('').map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join('')
+            );
+            return JSON.parse(json);
+        };
+        // 導向 LINE 登入頁（PKCE，全部在前端完成，不需要後端密鑰）
+        const startLineLogin = async () => {
+            const verifier = generateRandomString(64);
+            const challenge = base64UrlEncode(await sha256Buffer(verifier));
+            const state = generateRandomString(24);
+            sessionStorage.setItem(LINE_PKCE_VERIFIER_KEY, verifier);
+            sessionStorage.setItem(LINE_OAUTH_STATE_KEY, state);
+            const params = new URLSearchParams({
+                response_type: 'code',
+                client_id: LINE_LOGIN_CHANNEL_ID,
+                redirect_uri: LINE_LOGIN_REDIRECT_URI,
+                state,
+                scope: 'profile openid',
+                code_challenge: challenge,
+                code_challenge_method: 'S256'
+            });
+            window.location.href = `https://access.line.me/oauth2/v2.1/authorize?${params.toString()}`;
+        };
+        // 用 code 換 token（PKCE 公開客戶端，不需要 client_secret）
+        const exchangeLineToken = async (code, verifier) => {
+            const body = new URLSearchParams({
+                grant_type: 'authorization_code',
+                code,
+                redirect_uri: LINE_LOGIN_REDIRECT_URI,
+                client_id: LINE_LOGIN_CHANNEL_ID,
+                code_verifier: verifier
+            });
+            const res = await fetch('https://api.line.me/oauth2/v2.1/token', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body
+            });
+            if (!res.ok) throw new Error('LINE token exchange failed: ' + res.status);
+            return res.json();
+        };
 
         // ─── 工具函式 ──────────────────────────────────────────────────
         const formatDate = (dateObj) => {
@@ -127,6 +190,22 @@
         const productsCol = () => collection(db, 'artifacts', appId, 'public', 'data', 'shopProducts');
         const ordersCol = () => collection(db, 'artifacts', appId, 'public', 'data', 'orders');
         const parseOptions = (str) => String(str || '').split(/[\/,、]/).map(s => s.trim()).filter(Boolean);
+        // ✅ 把客人綁定的 LINE 身份存進 customerProfiles，讓賣家後台看得到真實身份
+        const linkLineProfile = async (name, profile) => {
+            if (!name || !name.trim() || !profile) return;
+            try {
+                await setDoc(
+                    doc(db, 'artifacts', appId, 'public', 'data', 'customerProfiles', name.trim()),
+                    {
+                        lineUserId: profile.userId || '',
+                        lineDisplayName: profile.displayName || '',
+                        linePictureUrl: profile.pictureUrl || '',
+                        lineLinkedAt: new Date().toISOString()
+                    },
+                    { merge: true }
+                );
+            } catch (err) { console.error('LINE profile link error:', err); }
+        };
 
         // ─── 主元件 ──────────────────────────────────────────────────
         const App = () => {
@@ -177,6 +256,8 @@
           const [specModal, setSpecModal] = useState(null);
           const [pickSize, setPickSize] = useState('');
           const [pickColor, setPickColor] = useState('');
+          // ✅ LINE 登入綁定後的個人資料（userId / displayName / pictureUrl）
+          const [lineProfile, setLineProfile] = useState(null);
 
           // ✅ 取得商品品名（相容新舊格式，沒填返空字串）
           const getProductName = (code) => {
@@ -235,6 +316,66 @@
             const unsubscribe = onAuthStateChanged(auth, u => setUser(u));
             return () => unsubscribe();
           }, []);
+
+          // ✅ LINE 登入回呼：頁面帶著 ?code=&state= 回來時，換 token 並解出個人資料
+          useEffect(() => {
+            const params = new URLSearchParams(window.location.search);
+            const code = params.get('code');
+            const state = params.get('state');
+            if (!code || !state) return;
+            const savedState = sessionStorage.getItem(LINE_OAUTH_STATE_KEY);
+            const verifier = sessionStorage.getItem(LINE_PKCE_VERIFIER_KEY);
+            sessionStorage.removeItem(LINE_OAUTH_STATE_KEY);
+            sessionStorage.removeItem(LINE_PKCE_VERIFIER_KEY);
+            // 清掉網址上的 code/state，避免重新整理時重複觸發
+            window.history.replaceState({}, '', window.location.origin + window.location.pathname);
+            if (!savedState || state !== savedState || !verifier) {
+                showMessage('LINE 登入驗證失敗，請重新登入', 'error');
+                return;
+            }
+            (async () => {
+                try {
+                    const tokenRes = await exchangeLineToken(code, verifier);
+                    const claims = decodeJwtPayload(tokenRes.id_token);
+                    const profile = { userId: claims.sub, displayName: claims.name || '', pictureUrl: claims.picture || '' };
+
+                    // ✅ 用 lineUserId 反查之前綁定過的暱稱：LINE 顯示名稱可能跟客人下單時用的暱稱不同，
+                    // 若曾經綁定過，優先沿用舊暱稱，訂單歷史才不會因為改了 LINE 名字而斷開
+                    let resolvedName = profile.displayName;
+                    let matchedExisting = false;
+                    try {
+                        const q = query(
+                            collection(db, 'artifacts', appId, 'public', 'data', 'customerProfiles'),
+                            where('lineUserId', '==', profile.userId)
+                        );
+                        const snap = await getDocs(q);
+                        if (!snap.empty) {
+                            resolvedName = snap.docs[0].id;
+                            matchedExisting = true;
+                        }
+                    } catch (lookupErr) { console.error('LINE profile lookup error:', lookupErr); }
+
+                    setLineProfile({ ...profile, matchedExisting });
+                    if (resolvedName) setSearchName(resolvedName);
+                    setBrowseMode(false);
+                    showMessage(
+                        matchedExisting ? `歡迎回來，${resolvedName} 💚` : `LINE 登入成功！如果你之前用別的暱稱下過單，記得改成那個暱稱唷`,
+                        matchedExisting ? 'success' : 'warn'
+                    );
+                } catch (err) {
+                    console.error('LINE login error:', err);
+                    showMessage('LINE 登入失敗，請再試一次', 'error');
+                }
+            })();
+          }, []);
+
+          // ✅ 統一的登入確認：手動輸入 or LINE 登入後確認名字，都會走這裡
+          const confirmLogin = () => {
+              if (!searchName.trim()) return;
+              setIsLoggedIn(true);
+              try { localStorage.setItem(NAME_KEY, searchName.trim()); } catch {}
+              if (lineProfile) linkLineProfile(searchName.trim(), lineProfile);
+          };
 
           // 雲端資料即時同步
           useEffect(() => {
@@ -669,21 +810,48 @@
                             </div>
                           )}
                           <div className="relative">
-                            <input 
-                              value={searchName} 
-                              onChange={e => setSearchName(e.target.value)} 
-                              onKeyDown={e => e.key === 'Enter' && searchName.trim() && (setIsLoggedIn(true), (()=>{try{localStorage.setItem(NAME_KEY,searchName.trim())}catch{}})())} 
-                              placeholder="您的名稱..." 
-                              className="w-full py-5 px-6 bg-white rounded-full text-sm font-bold outline-none focus:ring-2 ring-[#EDE6DA] transition-all shadow-sm" 
+                            <input
+                              value={searchName}
+                              onChange={e => setSearchName(e.target.value)}
+                              onKeyDown={e => e.key === 'Enter' && confirmLogin()}
+                              placeholder="您的名稱..."
+                              className="w-full py-5 px-6 bg-white rounded-full text-sm font-bold outline-none focus:ring-2 ring-[#EDE6DA] transition-all shadow-sm"
                             />
-                            <button 
-                              onClick={() => { if (searchName.trim()) { setIsLoggedIn(true); try{localStorage.setItem(NAME_KEY,searchName.trim())}catch{} } }} 
+                            <button
+                              onClick={confirmLogin}
                               className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 bg-[#333] text-white rounded-full flex items-center justify-center active:scale-90 transition-transform shadow-md"
                             >
                               <ChevronRight size={20}/>
                             </button>
                           </div>
-                          <p className="text-[11px] mt-4 text-[#6B6B6B] font-bold tracking-wider pl-2">
+
+                          {lineProfile ? (
+                            <div className="flex items-center gap-3 bg-[#EAF7EE] border border-[#BFE5CB] rounded-2xl px-4 py-3">
+                                {lineProfile.pictureUrl && <img src={lineProfile.pictureUrl} className="w-9 h-9 rounded-full shrink-0" alt=""/>}
+                                <div className="min-w-0">
+                                    <div className="text-[11px] font-black text-[#2E7D46]">已透過 LINE 登入 ✅</div>
+                                    {lineProfile.matchedExisting ? (
+                                        <div className="text-[10px] font-bold text-[#4C8A5C] truncate">已自動帶入您上次使用的暱稱</div>
+                                    ) : (
+                                        <div className="text-[10px] font-bold text-[#4C8A5C] truncate">{lineProfile.displayName}，若之前用別的暱稱下過單，請改成那個暱稱</div>
+                                    )}
+                                </div>
+                            </div>
+                          ) : (
+                            <>
+                              <div className="flex items-center gap-3 px-1">
+                                  <div className="flex-1 h-px bg-[#EDE6DA]"/>
+                                  <span className="text-[10px] font-bold text-[#AAAAAA]">或</span>
+                                  <div className="flex-1 h-px bg-[#EDE6DA]"/>
+                              </div>
+                              <button onClick={startLineLogin}
+                                  className="line-btn w-full py-3.5 text-white rounded-full text-xs font-bold tracking-widest shadow-md active:scale-95 transition-all flex items-center justify-center gap-2">
+                                  <MessageCircle size={15}/> 使用 LINE 登入
+                              </button>
+                            </>
+                          )}
+
+                          <p className="text-[11px] mt-1 text-[#6B6B6B] font-bold tracking-wider pl-2">
                             ※ 請輸入與社群相同的名稱，即可選購與查詢訂單
                           </p>
                           {(pendingAdd || wantOrders) && (
@@ -701,7 +869,7 @@
                         </div>
                         <div>
                           <h3 className="text-lg font-black">Hi, {searchName}</h3>
-                          <button onClick={() => { setIsLoggedIn(false); setSearchName(''); setCurrentPage('order'); try{localStorage.removeItem(NAME_KEY)}catch{} }} className="text-[10px] font-bold text-[#6B6B6B] uppercase tracking-widest mt-0.5 hover:text-[#3A3A3A] transition-colors">
+                          <button onClick={() => { setIsLoggedIn(false); setSearchName(''); setCurrentPage('order'); setLineProfile(null); try{localStorage.removeItem(NAME_KEY)}catch{} }} className="text-[10px] font-bold text-[#6B6B6B] uppercase tracking-widest mt-0.5 hover:text-[#3A3A3A] transition-colors">
                               Logout / 登出返回
                           </button>
                         </div>
