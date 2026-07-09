@@ -1508,7 +1508,7 @@
                                 return (
                                     <div key={p.id} className="bg-white rounded-[1.5rem] overflow-hidden shadow-sm border border-white flex flex-col">
                                         <button onClick={() => setDetailProduct(p)} className="aspect-square bg-[#F5F1EA] flex items-center justify-center overflow-hidden relative">
-                                            {p.image ? <img src={p.image} alt={p.name} className="w-full h-full object-cover"/> : <ShoppingBag size={32} className="text-[#C9BCA8]"/>}
+                                            {p.image ? <img src={p.image} alt={p.name} loading="lazy" className="w-full h-full object-cover"/> : <ShoppingBag size={32} className="text-[#C9BCA8]"/>}
                                             {p.category && <span className="absolute top-2 left-2 bg-white/85 text-[#8A6D3B] text-[9px] font-black px-2 py-0.5 rounded-full">{p.category}</span>}
                                         </button>
                                         <div className="p-3 flex-1 flex flex-col">
