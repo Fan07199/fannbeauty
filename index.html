@@ -121,8 +121,6 @@
         // ✅ LINE Login 頻道（Web app），採 Authorization Code + PKCE，不需要 Channel Secret
         const LINE_LOGIN_CHANNEL_ID = '2008448504';
         const LINE_LOGIN_REDIRECT_URI = 'https://fannbeauty.vercel.app/';
-        const LINE_PKCE_VERIFIER_KEY = 'fann-line-pkce-verifier';
-        const LINE_OAUTH_STATE_KEY = 'fann-line-oauth-state';
         const LINE_LAST_CODE_KEY = 'fann-line-last-code'; // 防止 LINE 轉址過程中同一組 code 被兩個分頁/情境重複處理
         const LINE_BIND_BONUS_AMOUNT = 50; // ✅ 首次綁定 LINE 贈送的購物金，改這個數字就能調整金額（設 0 就不送）
 
@@ -147,12 +145,15 @@
             return JSON.parse(json);
         };
         // 導向 LINE 登入頁（PKCE，全部在前端完成，不需要後端密鑰）
+        // ✅ verifier 直接包進 state 帶著走，不存 localStorage：
+        // Safari 的防追蹤機制常把「本站 → LINE → 本站」這種轉址往返
+        // 判定成 bounce tracking，回來時會把本站剛寫入的 localStorage 清空，
+        // 造成登入每次都驗證失敗。state 是 LINE 轉址回來時原封不動帶回的參數，
+        // 不受這個機制影響，所以改成從 state 直接還原 verifier。
         const startLineLogin = async () => {
             const verifier = generateRandomString(64);
             const challenge = base64UrlEncode(await sha256Buffer(verifier));
-            const state = generateRandomString(24);
-            localStorage.setItem(LINE_PKCE_VERIFIER_KEY, verifier);
-            localStorage.setItem(LINE_OAUTH_STATE_KEY, state);
+            const state = verifier + '.' + generateRandomString(16);
             const params = new URLSearchParams({
                 response_type: 'code',
                 client_id: LINE_LOGIN_CHANNEL_ID,
@@ -397,13 +398,12 @@
                 return;
             }
             localStorage.setItem(LINE_LAST_CODE_KEY, code);
-            const savedState = localStorage.getItem(LINE_OAUTH_STATE_KEY);
-            const verifier = localStorage.getItem(LINE_PKCE_VERIFIER_KEY);
-            localStorage.removeItem(LINE_OAUTH_STATE_KEY);
-            localStorage.removeItem(LINE_PKCE_VERIFIER_KEY);
             // 清掉網址上的 code/state，避免重新整理時重複觸發
             window.history.replaceState({}, '', window.location.origin + window.location.pathname);
-            if (!savedState || state !== savedState || !verifier) {
+            // ✅ verifier 直接從 state 拆出來（state 格式是 verifier + '.' + 隨機字串），
+            // 不用再去讀 localStorage，繞過 Safari 轉址後清掉 localStorage 的問題
+            const verifier = state.split('.')[0];
+            if (!verifier || verifier.length < 32) {
                 showMessage('LINE 登入驗證失敗，請重新登入', 'error');
                 return;
             }
@@ -994,14 +994,14 @@
                   <p className="text-[10px] font-bold opacity-30 tracking-[0.4em] uppercase mt-1">Select Shop</p>
                   {/* ✅ 一打開就看得到的小小 LINE 綁定按鈕，不用等到要加購物車/查訂單才出現 */}
                   {lineProfile ? (
-                      <div className="absolute right-5 top-6 flex items-center gap-1 px-2.5 py-1 rounded-full bg-[#EAF7EE] border border-[#BFE5CB]">
-                          <CheckCircle2 size={11} className="text-[#2E7D46]"/>
-                          <span className="text-[9px] font-black text-[#2E7D46]">LINE 已綁定</span>
+                      <div className="absolute right-4 top-5 flex items-center gap-1.5 px-4 py-2.5 rounded-full bg-[#EAF7EE] border border-[#BFE5CB]">
+                          <CheckCircle2 size={15} className="text-[#2E7D46]"/>
+                          <span className="text-[12px] font-black text-[#2E7D46]">LINE 已綁定</span>
                       </div>
                   ) : (
                       <button onClick={startLineLogin}
-                          className="line-btn absolute right-5 top-6 flex items-center gap-1 px-2.5 py-1 rounded-full text-white text-[9px] font-black shadow-sm active:scale-95 transition-all">
-                          <MessageCircle size={11}/> 綁定 LINE
+                          className="line-btn absolute right-4 top-5 flex items-center gap-1.5 px-4 py-2.5 rounded-full text-white text-[12px] font-black shadow-sm active:scale-95 transition-all">
+                          <MessageCircle size={15}/> 綁定 LINE
                       </button>
                   )}
                   {/* 分頁切換（登入後 或 先逛商品時都顯示） */}
