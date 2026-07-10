@@ -82,7 +82,7 @@
         import React, { useState, useEffect, useMemo, useRef } from 'react';
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
-        import { getFirestore, collection, doc, onSnapshot, setDoc, writeBatch, serverTimestamp, query, where, getDocs } from 'firebase/firestore';
+        import { getFirestore, collection, doc, onSnapshot, setDoc, writeBatch, serverTimestamp, query, where, getDocs, runTransaction } from 'firebase/firestore';
         import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
         import { Search, ChevronRight, MessageCircle, Truck, CheckCircle2, AlertTriangle, Calendar, Loader2, Package, Gift, CreditCard, Copy, MapPin, User, Phone, Store, Save, ArrowLeft, ArrowRight, ShoppingCart, ShoppingBag, Tag, Plus, Minus, X, Check, Send } from 'lucide-react';
 
@@ -487,6 +487,15 @@
                               phone: data.phone || '',
                               store: data.store || ''
                           });
+                          // ✅ 這個名字之前已經綁過 LINE 的話，帶回來顯示（不用重新登入 LINE 也看得到已綁定狀態）
+                          if (data.lineUserId) {
+                              setLineProfile(prev => prev || {
+                                  userId: data.lineUserId,
+                                  displayName: data.lineDisplayName || '',
+                                  pictureUrl: data.linePictureUrl || '',
+                                  matchedExisting: true
+                              });
+                          }
                       } else {
                           setShippingProfile({ receiverName: '', phone: '', store: '' });
                       }
@@ -676,6 +685,11 @@
           const cartTotal = useMemo(() => cartItems.reduce((s, i) => s + Number(i.product.price || 0) * i.qty, 0), [cartItems]);
 
           const startAdd = (product) => {
+              // ✅ 有設定庫存且已賣完，不能再加購
+              if (product.stock != null && product.stock <= 0) {
+                  showMessage('這個商品已經售完囉', 'warn');
+                  return;
+              }
               // ✅ 未登入（商品連結進來）→ 記住想加的商品，先要求輸入名字
               if (!isLoggedIn) {
                   setPendingAdd(product);
@@ -704,6 +718,11 @@
           };
           const addToCart = (product, spec) => {
               const key = `${product.id}__${spec}`;
+              const currentQty = cart[key]?.qty || 0;
+              if (product.stock != null && currentQty + 1 > product.stock) {
+                  showMessage(`「${product.name}」庫存只剩 ${product.stock} 件囉`, 'warn');
+                  return;
+              }
               setCart(prev => {
                   const cur = prev[key];
                   return { ...prev, [key]: { product, spec, qty: (cur?.qty || 0) + 1 } };
@@ -716,6 +735,10 @@
                   if (!cur) return prev;
                   const q = cur.qty + delta;
                   if (q <= 0) { const n = { ...prev }; delete n[key]; return n; }
+                  if (delta > 0 && cur.product.stock != null && q > cur.product.stock) {
+                      showMessage(`「${cur.product.name}」庫存只剩 ${cur.product.stock} 件囉`, 'warn');
+                      return prev;
+                  }
                   return { ...prev, [key]: { ...cur, qty: q } };
               });
           };
@@ -724,30 +747,46 @@
               if (cartItems.length === 0) { showMessage('購物車是空的', 'warn'); return; }
               setShowConfirm(true);
           };
-          // ✅ 送出訂單（欄位與賣家後台一致）
+          // ✅ 送出訂單（欄位與賣家後台一致）。有設定庫存的商品用交易確保不會超賣
           const submitOrder = async () => {
               if (!searchName.trim()) { showMessage('請先輸入名字', 'warn'); return; }
               if (cartItems.length === 0) return;
               setSubmitting(true);
               try {
-                  const batch = writeBatch(db);
-                  cartItems.forEach(item => {
-                      const ref = doc(ordersCol());
-                      batch.set(ref, {
-                          customerName: searchName.trim(),
-                          itemCode: (item.product.code || item.product.name || '').toUpperCase(),
-                          spec: item.spec || '',
-                          quantity: item.qty,
-                          price: String(item.product.price || 0),
-                          status: 'pending',
-                          customerLineId: '',
-                          stockStatus: 'none',
-                          source: 'shop',
-                          productName: item.product.name || '',
-                          createdAt: serverTimestamp()
+                  const stockLimitedItems = cartItems.filter(i => i.product.stock != null);
+                  await runTransaction(db, async (tx) => {
+                      // ✅ Firestore 交易規定：所有 read 要先做完才能開始 write
+                      const newStockByProductId = {};
+                      for (const item of stockLimitedItems) {
+                          const pRef = doc(db, 'artifacts', appId, 'public', 'data', 'shopProducts', item.product.id);
+                          const snap = await tx.get(pRef);
+                          if (!snap.exists()) throw new Error(`商品「${item.product.name}」已下架，請移除後再結帳`);
+                          const currentStock = Number(snap.data().stock ?? 0);
+                          const already = newStockByProductId[item.product.id]?.needed || 0;
+                          const needed = already + item.qty;
+                          if (needed > currentStock) throw new Error(`「${item.product.name}」庫存只剩 ${currentStock} 件，不夠您選購的數量，請調整後再試`);
+                          newStockByProductId[item.product.id] = { ref: pRef, currentStock, needed };
+                      }
+                      Object.values(newStockByProductId).forEach(({ ref, currentStock, needed }) => {
+                          tx.update(ref, { stock: currentStock - needed });
+                      });
+                      cartItems.forEach(item => {
+                          const ref = doc(ordersCol());
+                          tx.set(ref, {
+                              customerName: searchName.trim(),
+                              itemCode: (item.product.code || item.product.name || '').toUpperCase(),
+                              spec: item.spec || '',
+                              quantity: item.qty,
+                              price: String(item.product.price || 0),
+                              status: 'pending',
+                              customerLineId: '',
+                              stockStatus: 'none',
+                              source: 'shop',
+                              productName: item.product.name || '',
+                              createdAt: serverTimestamp()
+                          });
                       });
                   });
-                  await batch.commit();
                   // ✅ 記下這次下單摘要，供「通知賣家」使用
                   const summaryList = cartItems.map(i => `${i.product.name}${i.spec ? ` (${i.spec})` : ''} x${i.qty}`).join('\n');
                   setJustOrdered({ name: searchName.trim(), list: summaryList, total: cartTotal });
@@ -759,7 +798,7 @@
                   setCurrentPage('order');
               } catch (err) {
                   console.error('送單失敗:', err);
-                  showMessage('送出失敗，請稍後再試', 'error');
+                  showMessage(err.message && err.message.includes('庫存') ? err.message : '送出失敗，請稍後再試', 'error');
               } finally { setSubmitting(false); }
           };
           // ✅ 通知賣家（開啟官方帳號、帶入下單摘要）
@@ -789,6 +828,18 @@
               <header className="p-6 text-center w-full sticky top-0 z-20 bg-white/60 backdrop-blur-md pb-4 border-b border-white relative">
                   <h1 className="text-3xl cursive-logo text-[#B8A582]">Fann.Beauty</h1>
                   <p className="text-[10px] font-bold opacity-30 tracking-[0.4em] uppercase mt-1">Select Shop</p>
+                  {/* ✅ 一打開就看得到的小小 LINE 綁定按鈕，不用等到要加購物車/查訂單才出現 */}
+                  {lineProfile ? (
+                      <div className="absolute right-5 top-6 flex items-center gap-1 px-2.5 py-1 rounded-full bg-[#EAF7EE] border border-[#BFE5CB]">
+                          <CheckCircle2 size={11} className="text-[#2E7D46]"/>
+                          <span className="text-[9px] font-black text-[#2E7D46]">LINE 已綁定</span>
+                      </div>
+                  ) : (
+                      <button onClick={startLineLogin}
+                          className="line-btn absolute right-5 top-6 flex items-center gap-1 px-2.5 py-1 rounded-full text-white text-[9px] font-black shadow-sm active:scale-95 transition-all">
+                          <MessageCircle size={11}/> 綁定 LINE
+                      </button>
+                  )}
                   {/* 分頁切換（登入後 或 先逛商品時都顯示） */}
                   {(isLoggedIn || browseMode) && (
                     <div className="flex gap-2 mt-4 max-w-xs mx-auto">
@@ -1365,6 +1416,11 @@
                                 {detailProduct.code && <div className="text-[11px] text-[#888] font-bold mt-0.5">代碼 {detailProduct.code}</div>}
                             </div>
                             <div className="serif-number text-3xl text-[#B8A582]">${Number(detailProduct.price).toLocaleString()}</div>
+                            {detailProduct.stock != null && (
+                                <div className={`text-[11px] font-black ${detailProduct.stock <= 0 ? 'text-[#B55550]' : detailProduct.stock <= 5 ? 'text-[#E07B00]' : 'text-[#6B7A4A]'}`}>
+                                    {detailProduct.stock <= 0 ? '已售完' : `剩 ${detailProduct.stock} 件`}
+                                </div>
+                            )}
                             {(parseOptions(detailProduct.sizes).length > 0 || parseOptions(detailProduct.colors).length > 0) && (
                                 <div className="flex flex-wrap gap-1.5">
                                     {[...parseOptions(detailProduct.sizes), ...parseOptions(detailProduct.colors)].map((o, i) => (
@@ -1373,8 +1429,10 @@
                                 </div>
                             )}
                             {detailProduct.desc && <p className="text-[12px] text-[#6B6B6B] font-medium leading-relaxed whitespace-pre-wrap pt-1">{detailProduct.desc}</p>}
-                            <button onClick={() => { const p = detailProduct; setDetailProduct(null); startAdd(p); }} className="w-full py-4 bg-[#333] text-white rounded-2xl text-sm font-black active:scale-95 transition-all flex items-center justify-center gap-2 mt-2">
-                                <Plus size={16}/> 選購
+                            <button onClick={() => { const p = detailProduct; setDetailProduct(null); startAdd(p); }}
+                                disabled={detailProduct.stock != null && detailProduct.stock <= 0}
+                                className="w-full py-4 bg-[#333] text-white rounded-2xl text-sm font-black active:scale-95 transition-all flex items-center justify-center gap-2 mt-2 disabled:bg-[#DDD2BE] disabled:cursor-not-allowed disabled:active:scale-100">
+                                {detailProduct.stock != null && detailProduct.stock <= 0 ? '已售完' : <><Plus size={16}/> 選購</>}
                             </button>
                         </div>
                     </div>
@@ -1505,11 +1563,17 @@
                         <div className="grid grid-cols-2 gap-4">
                             {shownProducts.map(p => {
                                 const inCart = cartItems.filter(i => i.product.id === p.id).reduce((s, i) => s + i.qty, 0);
+                                const soldOut = p.stock != null && p.stock <= 0;
                                 return (
-                                    <div key={p.id} className="bg-white rounded-[1.5rem] overflow-hidden shadow-sm border border-white flex flex-col">
+                                    <div key={p.id} className={`bg-white rounded-[1.5rem] overflow-hidden shadow-sm border border-white flex flex-col ${soldOut ? 'opacity-60' : ''}`}>
                                         <button onClick={() => setDetailProduct(p)} className="aspect-square bg-[#F5F1EA] flex items-center justify-center overflow-hidden relative">
                                             {p.image ? <img src={p.image} alt={p.name} loading="lazy" className="w-full h-full object-cover"/> : <ShoppingBag size={32} className="text-[#C9BCA8]"/>}
                                             {p.category && <span className="absolute top-2 left-2 bg-white/85 text-[#8A6D3B] text-[9px] font-black px-2 py-0.5 rounded-full">{p.category}</span>}
+                                            {soldOut && (
+                                                <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+                                                    <span className="bg-white/90 text-[#B55550] text-[11px] font-black px-3 py-1.5 rounded-full tracking-widest">已售完</span>
+                                                </div>
+                                            )}
                                         </button>
                                         <div className="p-3 flex-1 flex flex-col">
                                             <button onClick={() => setDetailProduct(p)} className="text-left font-bold text-[13px] text-[#3A3A3A] leading-tight line-clamp-2">{p.name}</button>
@@ -1517,8 +1581,12 @@
                                                 <div className="text-[10px] text-[#888] font-bold mt-0.5">{[...parseOptions(p.sizes), ...parseOptions(p.colors)].join(' · ')}</div>
                                             )}
                                             <div className="serif-number text-lg text-[#B8A582] mt-1.5">${Number(p.price).toLocaleString()}</div>
-                                            <button onClick={() => startAdd(p)} className="mt-2 w-full py-2.5 bg-[#B8A582] text-white rounded-xl text-[12px] font-black flex items-center justify-center gap-1 active:scale-95 transition-all shadow-sm">
-                                                <Plus size={14}/> {inCart > 0 ? `已選 ${inCart}` : '選購'}
+                                            {!soldOut && p.stock != null && (
+                                                <div className={`text-[9px] font-bold mt-0.5 ${p.stock <= 5 ? 'text-[#E07B00]' : 'text-[#888]'}`}>剩 {p.stock} 件</div>
+                                            )}
+                                            <button onClick={() => startAdd(p)} disabled={soldOut}
+                                                className="mt-2 w-full py-2.5 bg-[#B8A582] text-white rounded-xl text-[12px] font-black flex items-center justify-center gap-1 active:scale-95 transition-all shadow-sm disabled:bg-[#DDD2BE] disabled:cursor-not-allowed disabled:active:scale-100">
+                                                {soldOut ? '已售完' : <><Plus size={14}/> {inCart > 0 ? `已選 ${inCart}` : '選購'}</>}
                                             </button>
                                         </div>
                                     </div>
