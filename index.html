@@ -123,6 +123,7 @@
         const LINE_LOGIN_REDIRECT_URI = 'https://fannbeauty.vercel.app/';
         const LINE_PKCE_VERIFIER_KEY = 'fann-line-pkce-verifier';
         const LINE_OAUTH_STATE_KEY = 'fann-line-oauth-state';
+        const LINE_LAST_CODE_KEY = 'fann-line-last-code'; // 防止 LINE 轉址過程中同一組 code 被兩個分頁/情境重複處理
 
         const base64UrlEncode = (buffer) => {
             return btoa(String.fromCharCode(...new Uint8Array(buffer)))
@@ -359,6 +360,15 @@
             const code = params.get('code');
             const state = params.get('state');
             if (!code || !state) return;
+            // ✅ LINE 轉址過程中，同一組 code 有時會在不同分頁/情境被載入兩次
+            // （例如 LINE App 內部先處理一次再交給 Safari）。第二次載入時
+            // savedState/verifier 已經被第一次消耗掉，直接判定失敗會誤報，
+            // 所以先用 code 本身擋掉重複執行，讓真正處理的那一次去顯示結果就好。
+            if (localStorage.getItem(LINE_LAST_CODE_KEY) === code) {
+                window.history.replaceState({}, '', window.location.origin + window.location.pathname);
+                return;
+            }
+            localStorage.setItem(LINE_LAST_CODE_KEY, code);
             const savedState = localStorage.getItem(LINE_OAUTH_STATE_KEY);
             const verifier = localStorage.getItem(LINE_PKCE_VERIFIER_KEY);
             localStorage.removeItem(LINE_OAUTH_STATE_KEY);
@@ -871,17 +881,20 @@
                           amount = Math.max(1, Math.floor(Math.random() * maxClaim) + 1);
                       }
 
+                      // ✅ Firestore 交易規定：所有 read 都要在任何 write 之前執行完，
+                      // 所以購物金這筆讀取要提到紅包 update 寫入之前
+                      const creditRef = doc(db, 'artifacts', appId, 'public', 'data', 'storeCredits', name);
+                      const creditSnap = await tx.get(creditRef);
+                      const currentBalance = creditSnap.exists() ? (creditSnap.data().balance || 0) : 0;
+                      const currentHistory = creditSnap.exists() ? (creditSnap.data().history || []) : [];
+                      const newBalance = currentBalance + amount;
+
                       tx.update(rpRef, {
                           remainingCount: data.remainingCount - 1,
                           remainingBudget: data.remainingBudget - amount,
                           claimedBy: { ...claimedBy, [name]: { amount, lineUserId: lineProfile.userId, claimedAt: Date.now() } }
                       });
 
-                      const creditRef = doc(db, 'artifacts', appId, 'public', 'data', 'storeCredits', name);
-                      const creditSnap = await tx.get(creditRef);
-                      const currentBalance = creditSnap.exists() ? (creditSnap.data().balance || 0) : 0;
-                      const currentHistory = creditSnap.exists() ? (creditSnap.data().history || []) : [];
-                      const newBalance = currentBalance + amount;
                       tx.set(creditRef, {
                           balance: newBalance,
                           history: [...currentHistory, {
