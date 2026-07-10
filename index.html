@@ -799,7 +799,10 @@
               if (cartItems.length === 0) return;
               setSubmitting(true);
               try {
+                  const name = searchName.trim();
                   const stockLimitedItems = cartItems.filter(i => i.product.stock != null);
+                  const creditRef = doc(db, 'artifacts', appId, 'public', 'data', 'storeCredits', name);
+                  let creditApplied = 0;
                   await runTransaction(db, async (tx) => {
                       // ✅ Firestore 交易規定：所有 read 要先做完才能開始 write
                       const newStockByProductId = {};
@@ -813,13 +816,19 @@
                           if (needed > currentStock) throw new Error(`「${item.product.name}」庫存只剩 ${currentStock} 件，不夠您選購的數量，請調整後再試`);
                           newStockByProductId[item.product.id] = { ref: pRef, currentStock, needed };
                       }
+                      // ✅ 自動折抵購物金：讀取目前餘額，最多折到商品小計為止（跟後台手動折抵的上限一致）
+                      const creditSnap = await tx.get(creditRef);
+                      const currentBalance = creditSnap.exists() ? (creditSnap.data().balance || 0) : 0;
+                      const currentHistory = creditSnap.exists() ? (creditSnap.data().history || []) : [];
+                      creditApplied = Math.max(0, Math.min(currentBalance, cartTotal));
+
                       Object.values(newStockByProductId).forEach(({ ref, currentStock, needed }) => {
                           tx.update(ref, { stock: currentStock - needed });
                       });
-                      cartItems.forEach(item => {
+                      cartItems.forEach((item, idx) => {
                           const ref = doc(ordersCol());
                           tx.set(ref, {
-                              customerName: searchName.trim(),
+                              customerName: name,
                               itemCode: (item.product.code || item.product.name || '').toUpperCase(),
                               spec: item.spec || '',
                               quantity: item.qty,
@@ -829,17 +838,28 @@
                               stockStatus: 'none',
                               source: 'shop',
                               productName: item.product.name || '',
+                              creditApplied: idx === 0 ? creditApplied : 0,
                               createdAt: serverTimestamp()
                           });
                       });
+                      if (creditApplied > 0) {
+                          const newBalance = currentBalance - creditApplied;
+                          tx.set(creditRef, {
+                              balance: newBalance,
+                              history: [...currentHistory, {
+                                  time: new Date().toISOString(), amount: -creditApplied,
+                                  note: '訂單自動折抵', balanceAfter: newBalance
+                              }].slice(-50)
+                          });
+                      }
                   });
                   // ✅ 記下這次下單摘要，供「通知賣家」使用
                   const summaryList = cartItems.map(i => `${i.product.name}${i.spec ? ` (${i.spec})` : ''} x${i.qty}`).join('\n');
-                  setJustOrdered({ name: searchName.trim(), list: summaryList, total: cartTotal });
+                  setJustOrdered({ name, list: summaryList, total: Math.max(0, cartTotal - creditApplied) });
                   setCart({});
                   setShowConfirm(false);
-                  try { localStorage.setItem(NAME_KEY, searchName.trim()); } catch {}
-                  showMessage('下單完成！已進入我的訂單 💕');
+                  try { localStorage.setItem(NAME_KEY, name); } catch {}
+                  showMessage(creditApplied > 0 ? `下單完成！已自動折抵 $${creditApplied} 購物金 💕` : '下單完成！已進入我的訂單 💕');
                   setTab('orders'); // ✅ 下單後直接切到我的訂單
                   setCurrentPage('order');
               } catch (err) {
@@ -1627,10 +1647,21 @@
                                 );
                             })}
                         </div>
-                        <div className="flex justify-between items-end pt-4 border-t border-dashed border-[#DDD2BE] mb-5">
+                        <div className="flex justify-between items-end pt-4 border-t border-dashed border-[#DDD2BE] mb-2">
                             <span className="text-[11px] font-black text-[#6B6B6B] uppercase tracking-[0.2em] mb-1">合計</span>
                             <span className="serif-number text-4xl text-[#B8A582] leading-none">${cartTotal.toLocaleString()}</span>
                         </div>
+                        {(() => {
+                            const previewCredit = Math.max(0, Math.min(storeCredits[searchName.trim()]?.balance || 0, cartTotal));
+                            return previewCredit > 0 ? (
+                                <div className="flex justify-between items-center mb-5 px-1">
+                                    <span className="text-[11px] font-bold text-[#B8A582] flex items-center gap-1">
+                                        <Gift size={11}/> 自動折抵購物金
+                                    </span>
+                                    <span className="serif-number text-lg text-[#B8A582]">-${previewCredit.toLocaleString()}</span>
+                                </div>
+                            ) : <div className="mb-5"/>;
+                        })()}
                         <div className="bg-[#EDE2CC] rounded-xl px-4 py-2.5 mb-4 border border-[#C9B88A]">
                             <p className="text-[10px] text-[#8A6D3B] font-bold leading-relaxed">💡 送出後可在「我的訂單」查看，運費與優惠將由賣家為您結算</p>
                         </div>
