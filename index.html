@@ -124,6 +124,7 @@
         const LINE_PKCE_VERIFIER_KEY = 'fann-line-pkce-verifier';
         const LINE_OAUTH_STATE_KEY = 'fann-line-oauth-state';
         const LINE_LAST_CODE_KEY = 'fann-line-last-code'; // 防止 LINE 轉址過程中同一組 code 被兩個分頁/情境重複處理
+        const LINE_BIND_BONUS_AMOUNT = 50; // ✅ 首次綁定 LINE 贈送的購物金，改這個數字就能調整金額（設 0 就不送）
 
         const base64UrlEncode = (buffer) => {
             return btoa(String.fromCharCode(...new Uint8Array(buffer)))
@@ -213,20 +214,47 @@
         const ordersCol = () => collection(db, 'artifacts', appId, 'public', 'data', 'orders');
         const parseOptions = (str) => String(str || '').split(/[\/,、]/).map(s => s.trim()).filter(Boolean);
         // ✅ 把客人綁定的 LINE 身份存進 customerProfiles，讓賣家後台看得到真實身份
+        // 如果是這個名字「第一次」綁定 LINE（之前沒有 lineUserId），額外贈送一筆購物金當歡迎禮
         const linkLineProfile = async (name, profile) => {
-            if (!name || !name.trim() || !profile) return;
+            if (!name || !name.trim() || !profile) return { bonusGranted: false, amount: 0 };
+            const trimmedName = name.trim();
             try {
-                await setDoc(
-                    doc(db, 'artifacts', appId, 'public', 'data', 'customerProfiles', name.trim()),
-                    {
+                const profileRef = doc(db, 'artifacts', appId, 'public', 'data', 'customerProfiles', trimmedName);
+                const creditRef = doc(db, 'artifacts', appId, 'public', 'data', 'storeCredits', trimmedName);
+                let bonusGranted = false;
+                await runTransaction(db, async (tx) => {
+                    // ✅ Firestore 交易規定：所有 read 要先做完才能開始 write
+                    const profileSnap = await tx.get(profileRef);
+                    const isFirstBind = !(profileSnap.exists() && profileSnap.data().lineUserId);
+                    const shouldGrantBonus = isFirstBind && LINE_BIND_BONUS_AMOUNT > 0;
+                    const creditSnap = shouldGrantBonus ? await tx.get(creditRef) : null;
+
+                    tx.set(profileRef, {
                         lineUserId: profile.userId || '',
                         lineDisplayName: profile.displayName || '',
                         linePictureUrl: profile.pictureUrl || '',
                         lineLinkedAt: new Date().toISOString()
-                    },
-                    { merge: true }
-                );
-            } catch (err) { console.error('LINE profile link error:', err); }
+                    }, { merge: true });
+
+                    if (shouldGrantBonus) {
+                        const currentBalance = creditSnap.exists() ? (creditSnap.data().balance || 0) : 0;
+                        const currentHistory = creditSnap.exists() ? (creditSnap.data().history || []) : [];
+                        const newBalance = currentBalance + LINE_BIND_BONUS_AMOUNT;
+                        tx.set(creditRef, {
+                            balance: newBalance,
+                            history: [...currentHistory, {
+                                time: new Date().toISOString(), amount: LINE_BIND_BONUS_AMOUNT,
+                                note: '首次綁定 LINE 贈送', balanceAfter: newBalance
+                            }].slice(-50)
+                        });
+                        bonusGranted = true;
+                    }
+                });
+                return { bonusGranted, amount: LINE_BIND_BONUS_AMOUNT };
+            } catch (err) {
+                console.error('LINE profile link error:', err);
+                return { bonusGranted: false, amount: 0 };
+            }
         };
 
         // ─── 主元件 ──────────────────────────────────────────────────
@@ -420,7 +448,11 @@
               if (!searchName.trim()) return;
               setIsLoggedIn(true);
               try { localStorage.setItem(NAME_KEY, searchName.trim()); } catch {}
-              if (lineProfile) linkLineProfile(searchName.trim(), lineProfile);
+              if (lineProfile) {
+                  linkLineProfile(searchName.trim(), lineProfile).then(({ bonusGranted, amount }) => {
+                      if (bonusGranted) showMessage(`🎁 首次綁定 LINE，送你 $${amount} 購物金！`);
+                  });
+              }
           };
 
           // 雲端資料即時同步
