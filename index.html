@@ -3,6 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- ✅ 避免瀏覽器快取到舊版本頁面，導致改過的邏輯（例如結帳規則）沒有立刻生效 -->
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <!-- 版本標記：v5.6.0 ( 分享縮圖 + 桌面圖示 ) -->
     <title>Fann.Beauty｜選購 · 查詢訂單</title>
 
@@ -713,6 +717,19 @@
 
           // ✅ 為了相容舊代碼，保留 myOrder 變數
           const myOrder = currentOrder;
+
+          // ✅ 登入時如果最新一筆訂單還「待結帳」（下單後沒完成匯款/賣貨便就跳出去了），
+          // 直接跳到我的訂單頁提醒她繼續完成付款，不用等她自己想到要去查
+          const _remindedPendingRef = useRef(false);
+          useEffect(() => {
+              if (!isLoggedIn || !dataLoaded || _remindedPendingRef.current) return;
+              _remindedPendingRef.current = true;
+              if (myOrder && myOrder.status === 'pending') {
+                  setTab('orders');
+                  setCurrentPage('order');
+                  showMessage('您有一筆訂單還沒完成付款，記得去結帳唷 💳', 'warn');
+              }
+          }, [isLoggedIn, dataLoaded, myOrder]);
 
           // ✅ 回報官方賴功能（修正 LINE 連結格式）
           const handleLineReport = () => {
