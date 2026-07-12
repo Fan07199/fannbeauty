@@ -826,12 +826,16 @@
           const openConfirm = () => {
               if (!searchName.trim()) { showMessage('請先在上方輸入名字', 'warn'); return; }
               if (cartItems.length === 0) { showMessage('購物車是空的', 'warn'); return; }
+              // ✅ 下單前一定要先綁定 LINE，這樣賣家才看得到客人真實身份、也能主動推播通知
+              if (!lineProfile || !lineProfile.userId) { showMessage('請先綁定 LINE 才能下單喔', 'warn'); return; }
               setShowConfirm(true);
           };
           // ✅ 送出訂單（欄位與賣家後台一致）。有設定庫存的商品用交易確保不會超賣
           const submitOrder = async () => {
               if (!searchName.trim()) { showMessage('請先輸入名字', 'warn'); return; }
               if (cartItems.length === 0) return;
+              // ✅ 保險起見在真正送單前再檢查一次，避免繞過確認畫面直接觸發
+              if (!lineProfile || !lineProfile.userId) { showMessage('請先綁定 LINE 才能下單喔', 'warn'); return; }
               setSubmitting(true);
               try {
                   const name = searchName.trim();
