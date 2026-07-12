@@ -214,6 +214,8 @@
         const productsCol = () => collection(db, 'artifacts', appId, 'public', 'data', 'shopProducts');
         const ordersCol = () => collection(db, 'artifacts', appId, 'public', 'data', 'orders');
         const parseOptions = (str) => String(str || '').split(/[\/,、]/).map(s => s.trim()).filter(Boolean);
+        // ✅ 商品排序：跟後台手動排序一致（sortOrder 越小越前面），沒排過的舊商品用建立時間換算
+        const getProductOrder = (p) => p.sortOrder != null ? p.sortOrder : -(p.createdAt || 0);
         // ✅ 把客人綁定的 LINE 身份存進 customerProfiles，讓賣家後台看得到真實身份
         // 如果是這個名字「第一次」綁定 LINE（之前沒有 lineUserId），額外贈送一筆購物金當歡迎禮
         const linkLineProfile = async (name, profile) => {
@@ -515,7 +517,7 @@
             if (!user) return;
             const unsub = onSnapshot(productsCol(), snap => {
                 const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-                list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+                list.sort((a, b) => getProductOrder(a) - getProductOrder(b));
                 setProducts(list);
                 setProductsLoaded(true);
             }, () => setProductsLoaded(true));
