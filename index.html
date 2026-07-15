@@ -328,6 +328,12 @@
           const [activeCat, setActiveCat] = useState('全部');
           const [shopSearch, setShopSearch] = useState('');
           const [detailProduct, setDetailProduct] = useState(null);
+          const [detailImgIdx, setDetailImgIdx] = useState(0); // ✅ 多張商品照片：目前滑到第幾張
+          const detailScrollRef = useRef(null);
+          useEffect(() => {
+              setDetailImgIdx(0);
+              if (detailScrollRef.current) detailScrollRef.current.scrollLeft = 0;
+          }, [detailProduct?.id]);
           const [specModal, setSpecModal] = useState(null);
           const [pickSize, setPickSize] = useState('');
           const [pickColor, setPickColor] = useState('');
@@ -1634,9 +1640,37 @@
                 <div className="fixed inset-0 z-[82] flex items-end justify-center bg-stone-900/60 backdrop-blur-sm animate-in" onClick={() => setDetailProduct(null)}>
                     <div className="bg-white w-full max-w-md rounded-t-[2.5rem] max-h-[92vh] overflow-y-auto scrollbar-hide" onClick={e => e.stopPropagation()}>
                         <div className="relative">
-                            <div className="aspect-square bg-[#F5F1EA] flex items-center justify-center overflow-hidden">
-                                {detailProduct.image ? <img src={detailProduct.image} alt={detailProduct.name} className="w-full h-full object-cover"/> : <ShoppingBag size={48} className="text-[#C9BCA8]"/>}
-                            </div>
+                            {(() => {
+                                const imgs = Array.isArray(detailProduct.images) && detailProduct.images.length > 0
+                                    ? detailProduct.images
+                                    : (detailProduct.image ? [detailProduct.image] : []);
+                                if (imgs.length === 0) {
+                                    return <div className="aspect-square bg-[#F5F1EA] flex items-center justify-center"><ShoppingBag size={48} className="text-[#C9BCA8]"/></div>;
+                                }
+                                return (
+                                    <>
+                                        <div ref={detailScrollRef}
+                                            onScroll={e => {
+                                                const w = e.currentTarget.clientWidth;
+                                                if (w > 0) setDetailImgIdx(Math.round(e.currentTarget.scrollLeft / w));
+                                            }}
+                                            className="aspect-square bg-[#F5F1EA] flex overflow-x-auto snap-x snap-mandatory scrollbar-hide">
+                                            {imgs.map((url, i) => (
+                                                <img key={i} src={url} alt={detailProduct.name} className="w-full h-full object-cover shrink-0 snap-center"/>
+                                            ))}
+                                        </div>
+                                        {imgs.length > 1 && (
+                                            <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1.5">
+                                                {imgs.map((_, i) => (
+                                                    <button key={i}
+                                                        onClick={() => detailScrollRef.current && detailScrollRef.current.scrollTo({ left: i * detailScrollRef.current.clientWidth, behavior: 'smooth' })}
+                                                        className={`h-1.5 rounded-full transition-all ${i === detailImgIdx ? 'bg-white w-4' : 'bg-white/50 w-1.5'}`}/>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </>
+                                );
+                            })()}
                             <button onClick={() => setDetailProduct(null)} className="absolute top-4 right-4 w-9 h-9 rounded-full bg-white/90 flex items-center justify-center shadow-md text-[#555]"><X size={18}/></button>
                             {detailProduct.category && <span className="absolute top-4 left-4 bg-white/90 text-[#8A6D3B] text-[11px] font-black px-3 py-1 rounded-full shadow-sm">{detailProduct.category}</span>}
                         </div>
