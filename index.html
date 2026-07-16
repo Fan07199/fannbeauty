@@ -100,7 +100,7 @@
         import { initializeApp } from 'firebase/app';
         import { getFirestore, collection, doc, onSnapshot, setDoc, writeBatch, serverTimestamp, query, where, getDocs, runTransaction } from 'firebase/firestore';
         import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-        import { Search, ChevronRight, MessageCircle, Truck, CheckCircle2, AlertTriangle, Calendar, Loader2, Package, Gift, CreditCard, Copy, MapPin, User, Phone, Store, Save, ArrowLeft, ArrowRight, ShoppingCart, ShoppingBag, Tag, Plus, Minus, X, Check, Send } from 'lucide-react';
+        import { Search, ChevronRight, MessageCircle, Truck, CheckCircle2, AlertTriangle, Calendar, Loader2, Package, Gift, CreditCard, Copy, MapPin, User, Phone, Store, Save, ArrowLeft, ArrowRight, ShoppingCart, ShoppingBag, Tag, Plus, Minus, X, Check, Send, Instagram } from 'lucide-react';
 
         // ─── Firebase 設定 (與賣家端一致) ──────────────────────────────
         const firebaseConfig = {
@@ -120,6 +120,7 @@
         // ✅ v4.3: 動態運費改由 storeConfig.shippingFee 提供（移除寫死 SHIPPING_FEE）
         // ✅ 官方 LINE ID
         const LINE_OA_ID = "533krnmt";
+        const INSTAGRAM_URL = "https://www.instagram.com/fann.beautyy";
 
         // ─── LINE Login（客人綁定登入，讓賣家看得到真實身份）──────────
         // ✅ LINE Login 頻道（Web app），採 Authorization Code + PKCE，不需要 Channel Secret
@@ -1618,6 +1619,28 @@
                   />
                 )}
               </main>
+
+              {/* ✅ 右側浮動快捷按鈕：IG／LINE／購物車，開場選單畫面不顯示 */}
+              {!showHomeMenu && (
+                <div className="fixed right-4 bottom-28 z-30 flex flex-col items-center gap-3">
+                    <a href={INSTAGRAM_URL} target="_blank" rel="noopener noreferrer"
+                        className="w-12 h-12 rounded-full shadow-lg flex items-center justify-center text-white active:scale-90 transition-all"
+                        style={{ background: 'linear-gradient(45deg, #f9ce34, #ee2a7b, #6228d7)' }}>
+                        <Instagram size={20}/>
+                    </a>
+                    <button onClick={() => window.open(`https://line.me/R/ti/p/@${LINE_OA_ID}`, '_blank', 'noopener,noreferrer')}
+                        className="w-12 h-12 rounded-full bg-[#06C755] shadow-lg flex items-center justify-center text-white active:scale-90 transition-all">
+                        <MessageCircle size={20}/>
+                    </button>
+                    <button onClick={() => { if (cartCount > 0) { openConfirm(); } else { setTab('shop'); showMessage('購物車是空的，先去選購吧', 'warn'); } }}
+                        className="relative w-12 h-12 rounded-full bg-[#333] shadow-lg flex items-center justify-center text-white active:scale-90 transition-all">
+                        <ShoppingCart size={18}/>
+                        {cartCount > 0 && (
+                            <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-[#B55550] text-white text-[10px] font-black flex items-center justify-center">{cartCount}</span>
+                        )}
+                    </button>
+                </div>
+              )}
 
               {/* 底部購物車列（僅選購分頁、有商品時） */}
               {isLoggedIn && tab === 'shop' && cartCount > 0 && (
