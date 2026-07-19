@@ -100,7 +100,7 @@
         import { initializeApp } from 'firebase/app';
         import { getFirestore, collection, doc, onSnapshot, setDoc, writeBatch, serverTimestamp, query, where, getDocs, runTransaction } from 'firebase/firestore';
         import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-        import { Search, ChevronRight, MessageCircle, Truck, CheckCircle2, AlertTriangle, Calendar, Loader2, Package, Gift, CreditCard, Copy, MapPin, User, Phone, Store, Save, ArrowLeft, ArrowRight, ShoppingCart, ShoppingBag, Tag, Plus, Minus, X, Check, Send, Instagram, FileText, Ruler } from 'lucide-react';
+        import { Search, ChevronRight, MessageCircle, Truck, CheckCircle2, AlertTriangle, Calendar, Loader2, Package, Gift, CreditCard, Copy, MapPin, User, Phone, Store, Save, ArrowLeft, ArrowRight, ShoppingCart, ShoppingBag, Tag, Plus, Minus, X, Check, Send, Instagram, FileText, Ruler, History } from 'lucide-react';
 
         // ─── Firebase 設定 (與賣家端一致) ──────────────────────────────
         const firebaseConfig = {
@@ -309,6 +309,7 @@
           // ═══ 選購頁 state ═══
           const [tab, setTab] = useState('shop'); // shop / orders — 主分頁
           const [showNoticeModal, setShowNoticeModal] = useState(false);
+          const [showCreditHistory, setShowCreditHistory] = useState(false);
           // ✅ 開場選單：完全沒有帶任何連結參數、也還沒登入過的訪客，先看選單（新品上市／會員綁定／查看訂單）
           // 再決定要幹嘛，避免一開始就直接丟進選購頁、綁定 LINE 按鈕又擋到 Logo
           const [showHomeMenu, setShowHomeMenu] = useState(!_urlName && !_urlRedPacket && !_urlProduct && !_savedName);
@@ -1065,7 +1066,17 @@
 
               <main className="flex-1 p-6 max-w-md mx-auto w-full pb-28">
                 {showHomeMenu ? (
-                  <div className="mt-6 space-y-4 animate-in">
+                  <div className="mt-2 space-y-4 animate-in">
+                    {storeConfig.bannerImages && storeConfig.bannerImages.length > 0 && (
+                        <div className="relative rounded-[2rem] overflow-hidden shadow-xl aspect-[4/5]">
+                            <img src={storeConfig.bannerImages[0]} alt="" className="w-full h-full object-cover"/>
+                            <div className="absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent"/>
+                            <div className="absolute bottom-5 left-5 right-5 text-white">
+                                <p className="text-[10px] font-bold tracking-[0.3em] uppercase opacity-80">Fann.Beauty</p>
+                                <p className="text-lg font-black mt-0.5 drop-shadow">{storeConfig.bannerTagline || '精選穿搭，值得被看見'}</p>
+                            </div>
+                        </div>
+                    )}
                     <button onClick={() => { setShowHomeMenu(false); setBrowseMode(true); }}
                         className="w-full bg-white/80 rounded-[2rem] p-6 border border-white shadow-xl flex items-center gap-4 active:scale-95 transition-all text-left">
                         <div className="w-14 h-14 rounded-2xl bg-[#F5F1EA] flex items-center justify-center shrink-0">
@@ -1182,15 +1193,36 @@
                               Logout / 登出返回
                           </button>
                         </div>
-                        {(currentOrder || pastOrders.length > 0) && (
-                            <div className="text-right shrink-0">
-                                <div className="text-[9px] font-bold text-[#6B6B6B] uppercase tracking-wider">累計消費</div>
-                                <div className="serif-number text-lg text-[#B8A582] leading-none">
-                                    ${((currentOrder?.finalTotal || 0) + pastOrders.reduce((s, g) => s + (g.finalTotal || 0), 0)).toLocaleString()}
-                                </div>
-                            </div>
-                        )}
                     </div>
+
+                    {/* ✅ 會員中心：累計消費 + 購物金餘額 + 明細 */}
+                    {(() => {
+                        const lifetimeSpend = (currentOrder?.finalTotal || 0) + pastOrders.reduce((s, g) => s + (g.finalTotal || 0), 0);
+                        const creditData = storeCredits[searchName.trim()] || {};
+                        const creditBalance = creditData.balance || 0;
+                        const creditHistory = (creditData.history || []).slice().reverse();
+                        if (!currentOrder && pastOrders.length === 0 && creditBalance <= 0) return null;
+                        return (
+                            <div className="bg-white rounded-[2rem] p-5 shadow-lg border border-white space-y-3">
+                                <div className="grid grid-cols-2 gap-3">
+                                    <div className="text-center">
+                                        <div className="text-[9px] font-bold text-[#6B6B6B] uppercase tracking-wider">累計消費</div>
+                                        <div className="serif-number text-xl text-[#B8A582] mt-0.5">${lifetimeSpend.toLocaleString()}</div>
+                                    </div>
+                                    <div className="text-center border-l border-[#EDE6DA]">
+                                        <div className="text-[9px] font-bold text-[#6B6B6B] uppercase tracking-wider">購物金餘額</div>
+                                        <div className="serif-number text-xl text-[#B8A582] mt-0.5">${creditBalance.toLocaleString()}</div>
+                                    </div>
+                                </div>
+                                {creditHistory.length > 0 && (
+                                    <button onClick={() => setShowCreditHistory(true)}
+                                        className="w-full pt-3 border-t border-dashed border-[#EDE6DA] text-[11px] font-bold text-[#6B7A4A] flex items-center justify-center gap-1">
+                                        <History size={12}/> 查看購物金明細
+                                    </button>
+                                )}
+                            </div>
+                        );
+                    })()}
 
                     {/* ✅ 下單成功後：通知賣家橫幅 */}
                     {justOrdered && (
@@ -1795,6 +1827,32 @@
                             <button onClick={() => setShowNoticeModal(false)} className="text-[#888]"><X size={20}/></button>
                         </div>
                         <p className="text-[13px] text-[#555555] font-medium leading-relaxed whitespace-pre-wrap">{storeConfig.shoppingNotice}</p>
+                    </div>
+                </div>
+              )}
+
+              {/* 購物金明細 Modal */}
+              {showCreditHistory && (
+                <div className="fixed inset-0 z-[90] flex items-end justify-center bg-stone-900/50 backdrop-blur-sm animate-in" onClick={() => setShowCreditHistory(false)}>
+                    <div className="bg-white w-full max-w-md rounded-t-[2.5rem] p-6 pb-8 max-h-[80vh] overflow-y-auto scrollbar-hide" onClick={e => e.stopPropagation()}>
+                        <div className="w-9 h-1 bg-[#EDE6DA] rounded-full mx-auto mb-5"/>
+                        <div className="flex items-center justify-between mb-4">
+                            <h3 className="text-lg font-black text-[#3A3A3A] flex items-center gap-2"><History size={18} className="text-[#B8A582]"/> 購物金明細</h3>
+                            <button onClick={() => setShowCreditHistory(false)} className="text-[#888]"><X size={20}/></button>
+                        </div>
+                        <div className="space-y-2">
+                            {(storeCredits[searchName.trim()]?.history || []).slice().reverse().map((h, i) => (
+                                <div key={i} className="flex justify-between items-center bg-[#F5F1EA] rounded-2xl px-4 py-3">
+                                    <div className="min-w-0 mr-2">
+                                        <div className="text-[12px] font-bold text-[#3A3A3A] truncate">{h.note}</div>
+                                        <div className="text-[10px] text-[#888888] font-bold mt-0.5">{h.time ? new Date(h.time).toLocaleDateString('zh-TW') : ''}</div>
+                                    </div>
+                                    <span className={`shrink-0 text-sm font-black ${h.amount > 0 ? 'text-[#6B7A4A]' : 'text-[#B55550]'}`}>
+                                        {h.amount > 0 ? '+' : ''}${h.amount}
+                                    </span>
+                                </div>
+                            ))}
+                        </div>
                     </div>
                 </div>
               )}
