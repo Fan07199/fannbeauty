@@ -1740,7 +1740,7 @@
                                     ? detailProduct.images
                                     : (detailProduct.image ? [detailProduct.image] : []);
                                 if (imgs.length === 0) {
-                                    return <div className="aspect-square bg-[#F5F1EA] flex items-center justify-center"><ShoppingBag size={48} className="text-[#C9BCA8]"/></div>;
+                                    return <div className="aspect-[3/4] bg-[#F5F1EA] flex items-center justify-center"><ShoppingBag size={48} className="text-[#C9BCA8]"/></div>;
                                 }
                                 return (
                                     <>
@@ -1749,7 +1749,7 @@
                                                 const w = e.currentTarget.clientWidth;
                                                 if (w > 0) setDetailImgIdx(Math.round(e.currentTarget.scrollLeft / w));
                                             }}
-                                            className="aspect-square bg-[#F5F1EA] flex overflow-x-auto snap-x snap-mandatory scrollbar-hide">
+                                            className="aspect-[3/4] bg-[#F5F1EA] flex overflow-x-auto snap-x snap-mandatory scrollbar-hide">
                                             {imgs.map((url, i) => (
                                                 <img key={i} src={url} alt={detailProduct.name} className="w-full h-full object-cover shrink-0 snap-center"/>
                                             ))}
@@ -2160,7 +2160,7 @@
                                 const soldOut = p.stock != null && p.stock <= 0;
                                 return (
                                     <div key={p.id} className={`bg-white rounded-[1.5rem] overflow-hidden shadow-sm border border-white flex flex-col ${soldOut ? 'opacity-60' : ''}`}>
-                                        <button onClick={() => setDetailProduct(p)} className="aspect-square bg-[#F5F1EA] flex items-center justify-center overflow-hidden relative">
+                                        <button onClick={() => setDetailProduct(p)} className="aspect-[3/4] bg-[#F5F1EA] flex items-center justify-center overflow-hidden relative">
                                             {p.image ? <img src={p.image} alt={p.name} loading="lazy" className="w-full h-full object-cover"/> : <ShoppingBag size={32} className="text-[#C9BCA8]"/>}
                                             {p.category && <span className="absolute top-2 left-2 bg-white/85 text-[#8A6D3B] text-[9px] font-black px-2 py-0.5 rounded-full">{p.category}</span>}
                                             {soldOut && (
