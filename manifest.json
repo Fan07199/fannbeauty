@@ -1,0 +1,11 @@
+{
+  "name": "Fann.Beauty 精品選物",
+  "short_name": "Fann.Beauty",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#FAF7F2",
+  "theme_color": "#FAF7F2",
+  "icons": [
+    { "src": "/logo.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
