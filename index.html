@@ -14,6 +14,13 @@
     <link rel="icon" type="image/png" href="/logo.png">
     <link rel="apple-touch-icon" href="/logo.png">
 
+    <!-- ✅ 加到主畫面後：像 App 一樣獨立開啟（不顯示瀏覽器網址列），狀態列樣式跟品牌色 -->
+    <link rel="manifest" href="/manifest.json">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="Fann.Beauty">
+    <meta name="theme-color" content="#FAF7F2">
+
     <!-- ✅ 分享到 LINE／FB 等 App 時顯示的縮圖卡片 -->
     <meta property="og:type" content="website">
     <meta property="og:title" content="Fann.Beauty｜選購 · 查詢訂單">
@@ -100,7 +107,7 @@
         import { initializeApp } from 'firebase/app';
         import { getFirestore, collection, doc, onSnapshot, setDoc, writeBatch, serverTimestamp, query, where, getDocs, runTransaction } from 'firebase/firestore';
         import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-        import { Search, ChevronRight, MessageCircle, Truck, CheckCircle2, AlertTriangle, Calendar, Loader2, Package, Gift, CreditCard, Copy, MapPin, User, Phone, Store, Save, ArrowLeft, ArrowRight, ShoppingCart, ShoppingBag, Tag, Plus, Minus, X, Check, Send, Instagram, FileText, Ruler, History } from 'lucide-react';
+        import { Search, ChevronRight, MessageCircle, Truck, CheckCircle2, AlertTriangle, Calendar, Loader2, Package, Gift, CreditCard, Copy, MapPin, User, Phone, Store, Save, ArrowLeft, ArrowRight, ShoppingCart, ShoppingBag, Tag, Plus, Minus, X, Check, Send, Instagram, FileText, Ruler, History, Menu } from 'lucide-react';
 
         // ─── Firebase 設定 (與賣家端一致) ──────────────────────────────
         const firebaseConfig = {
@@ -311,6 +318,13 @@
           const [showNoticeModal, setShowNoticeModal] = useState(false);
           const [showCreditHistory, setShowCreditHistory] = useState(false);
           const [showNameField, setShowNameField] = useState(false);
+          const [featuredRedPacket, setFeaturedRedPacket] = useState(null); // ✅ 開場選單用：不用帶連結，自動抓目前有沒有紅包活動在跑
+          const [dismissedHomeHint, setDismissedHomeHint] = useState(() => {
+              try { return localStorage.getItem('fann-shop-hide-addhome-hint') === '1'; } catch { return false; }
+          });
+          const isStandaloneApp = (() => {
+              try { return window.navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches; } catch { return false; }
+          })();
           // ✅ 開場選單：完全沒有帶任何連結參數、也還沒登入過的訪客，先看選單（新品上市／會員綁定／查看訂單）
           // 再決定要幹嘛，避免一開始就直接丟進選購頁、綁定 LINE 按鈕又擋到 Logo
           const [showHomeMenu, setShowHomeMenu] = useState(!_urlName && !_urlRedPacket && !_urlProduct && !_savedName);
@@ -384,10 +398,33 @@
                       const pct = Number(promo.percent) || 100;
                       return Math.round(eTotal * (100 - pct) / 100);
                   }
-                  case 'threshold':
-                      return eTotal >= (Number(promo.threshold) || 0)
-                          ? (Number(promo.thresholdDiscount) || 0) : 0;
+                  case 'threshold': {
+                      // ✅ 階梯式滿額折：找出符合資格的門檻中金額最高的那一階套用（不是每階疊加），跟後台邏輯一致
+                      const tiers = Array.isArray(promo.tiers) && promo.tiers.length > 0
+                          ? promo.tiers
+                          : (promo.threshold ? [{ threshold: promo.threshold, discount: promo.thresholdDiscount }] : []);
+                      const applicable = tiers
+                          .filter(t => eTotal >= (Number(t.threshold) || 0))
+                          .sort((a, b) => (Number(b.threshold) || 0) - (Number(a.threshold) || 0))[0];
+                      return applicable ? (Number(applicable.discount) || 0) : 0;
+                  }
                   default: return 0;
+              }
+          };
+          // ✅ 開場選單用的促銷文案（只是展示用的一句話，實際折扣以 calcDiscount 結帳時計算為準）
+          const promoTeaserText = (promo) => {
+              if (!promo) return '';
+              switch (promo.type) {
+                  case 'fixed':    return `全館每件折 $${promo.value}`;
+                  case 'percent':  return `全館 ${promo.percent} 折`;
+                  case 'threshold': {
+                      const tiers = (Array.isArray(promo.tiers) && promo.tiers.length > 0
+                          ? promo.tiers
+                          : (promo.threshold ? [{ threshold: promo.threshold, discount: promo.thresholdDiscount }] : []))
+                          .slice().sort((a, b) => (Number(a.threshold) || 0) - (Number(b.threshold) || 0));
+                      return tiers.map(t => `滿$${t.threshold}折$${t.discount}`).join('、');
+                  }
+                  default: return '';
               }
           };
 
@@ -524,6 +561,18 @@
             }, err => console.error("Archived sync error:", err));
 
             return () => { unsubOrders(); unsubStore(); unsubCredits(); unsubPrice(); unsubPromo(); unsubArchived(); };
+          }, [user]);
+
+          // ✅ 開場選單用：不需要帶連結，自動查有沒有進行中的紅包活動可以顯眼推薦
+          useEffect(() => {
+              if (!user) return;
+              const unsub = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'redPackets'), snap => {
+                  const active = snap.docs
+                      .map(d => ({ id: d.id, ...d.data() }))
+                      .find(rp => rp.active && (rp.remainingCount || 0) > 0);
+                  setFeaturedRedPacket(active || null);
+              }, () => {});
+              return () => unsub();
           }, [user]);
 
           // ✅ v5.6: 監聽紅包活動（?redpacket=xxx 進來才會抓）
@@ -1045,6 +1094,12 @@
               </div>
               
               <header className="p-6 text-center w-full sticky top-0 z-20 bg-white/60 backdrop-blur-md pb-4 border-b border-white relative">
+                  {!showHomeMenu && (
+                      <button onClick={() => setShowHomeMenu(true)}
+                          className="absolute top-6 left-6 w-9 h-9 rounded-full bg-white/70 border border-[#EDE6DA] flex items-center justify-center text-[#555555] active:scale-90 transition-all">
+                          <Menu size={18}/>
+                      </button>
+                  )}
                   {storeConfig.shoppingNotice && !showHomeMenu && (
                       <button onClick={() => setShowNoticeModal(true)}
                           className="absolute top-6 right-6 flex items-center gap-1 text-[10px] font-bold text-[#8A7864] bg-white/70 px-3 py-1.5 rounded-full border border-[#EDE6DA] active:scale-95 transition-all">
@@ -1097,6 +1152,50 @@
                             </div>
                         </div>
                     )}
+                    {(LINE_BIND_BONUS_AMOUNT > 0 || storeConfig.cashbackRate > 0) && (
+                        <div className="w-full bg-white/80 rounded-[1.75rem] border border-white shadow-sm overflow-hidden">
+                            <div className="bg-[#3A3A3A] text-white text-center py-1.5 text-[10px] font-black tracking-[0.2em] uppercase">✨ 會員專屬好康</div>
+                            <div className="grid grid-cols-2 divide-x divide-[#EDE6DA]">
+                                {LINE_BIND_BONUS_AMOUNT > 0 && (
+                                    <div className="p-4 text-center">
+                                        <div className="text-2xl">🎁</div>
+                                        <div className="text-lg font-black text-[#B8A582] mt-1">${LINE_BIND_BONUS_AMOUNT}</div>
+                                        <div className="text-[10px] text-[#6B6B6B] font-bold mt-0.5">新會員綁定 LINE 送購物金</div>
+                                    </div>
+                                )}
+                                {storeConfig.cashbackRate > 0 && (
+                                    <div className="p-4 text-center">
+                                        <div className="text-2xl">💰</div>
+                                        <div className="text-lg font-black text-[#B8A582] mt-1">{Math.round(storeConfig.cashbackRate * 1000) / 10}%</div>
+                                        <div className="text-[10px] text-[#6B6B6B] font-bold mt-0.5">每筆訂單回饋購物金</div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+                    {isPromoActive(promotion) && (
+                        <div className="w-full bg-gradient-to-r from-[#FFF3E0] to-[#FFE8CC] rounded-[1.75rem] px-5 py-4 border border-[#FFD580] flex items-center gap-3">
+                            <span className="text-2xl shrink-0">🔥</span>
+                            <div className="min-w-0">
+                                <div className="text-[12px] font-black text-[#E07B00] truncate">{promotion.name || '限時優惠'}進行中</div>
+                                <div className="text-[11px] font-bold text-[#8A6D3B] mt-0.5 truncate">{promoTeaserText(promotion)}</div>
+                            </div>
+                        </div>
+                    )}
+                    {featuredRedPacket && (
+                        <button onClick={() => { window.location.href = window.location.pathname + '?redpacket=' + featuredRedPacket.id; }}
+                            className="w-full rounded-[1.75rem] p-5 shadow-xl flex items-center gap-4 active:scale-95 transition-all text-left text-white"
+                            style={{ background: 'linear-gradient(135deg,#B55550,#E07B00)' }}>
+                            <div className="w-14 h-14 rounded-2xl bg-white/20 flex items-center justify-center shrink-0">
+                                <Gift size={26}/>
+                            </div>
+                            <div className="flex-1 min-w-0">
+                                <div className="text-sm font-black">🧧 {featuredRedPacket.name}</div>
+                                <div className="text-[11px] font-bold opacity-90 mt-0.5">還剩 {featuredRedPacket.remainingCount} 張，點進來手氣試試看！</div>
+                            </div>
+                            <ChevronRight size={18} className="shrink-0"/>
+                        </button>
+                    )}
                     <button onClick={() => { setShowHomeMenu(false); setBrowseMode(true); }}
                         className="w-full bg-white/80 rounded-[2rem] p-6 border border-white shadow-xl flex items-center gap-4 active:scale-95 transition-all text-left">
                         <div className="w-14 h-14 rounded-2xl bg-[#F5F1EA] flex items-center justify-center shrink-0">
@@ -1130,6 +1229,35 @@
                         </div>
                         <ChevronRight size={18} className="text-[#C9BCA8] shrink-0"/>
                     </button>
+
+                    {/* ✅ 社群連結 */}
+                    <div className="flex gap-3 pt-1">
+                        <a href={INSTAGRAM_URL} target="_blank" rel="noopener noreferrer"
+                            className="flex-1 py-3.5 rounded-2xl text-white text-[12px] font-black flex items-center justify-center gap-2 active:scale-95 transition-all shadow-sm"
+                            style={{ background: 'linear-gradient(45deg, #f9ce34, #ee2a7b, #6228d7)' }}>
+                            <Instagram size={16}/> Instagram
+                        </a>
+                        <button onClick={() => window.open(`https://line.me/R/ti/p/@${LINE_OA_ID}`, '_blank', 'noopener,noreferrer')}
+                            className="flex-1 py-3.5 rounded-2xl bg-[#06C755] text-white text-[12px] font-black flex items-center justify-center gap-2 active:scale-95 transition-all shadow-sm">
+                            <MessageCircle size={16}/> 加 LINE 好友
+                        </button>
+                    </div>
+
+                    {/* ✅ 提醒加到主畫面：已經是獨立 App 模式就不用再顯示 */}
+                    {!isStandaloneApp && !dismissedHomeHint && (
+                        <div className="bg-white/70 border border-white rounded-2xl px-4 py-3 flex items-start gap-2.5">
+                            <span className="text-lg shrink-0">📲</span>
+                            <div className="min-w-0 flex-1">
+                                <p className="text-[11px] font-bold text-[#555555] leading-relaxed">
+                                    把這個網頁加入手機主畫面，之後就能像 App 一樣一鍵打開！<br/>
+                                    iPhone：點下方分享圖示 <span className="inline-block">⬆️</span> →「加入主畫面」<br/>
+                                    Android：點右上角選單 ⋮ →「新增至主畫面」
+                                </p>
+                            </div>
+                            <button onClick={() => { setDismissedHomeHint(true); try { localStorage.setItem('fann-shop-hide-addhome-hint', '1'); } catch {} }}
+                                className="text-[#AAAAAA] shrink-0"><X size={14}/></button>
+                        </div>
+                    )}
                   </div>
                 ) : (!isLoggedIn && !browseMode) ? (
                   <div className="mt-6 space-y-8 animate-in">
@@ -2136,6 +2264,13 @@
                                     ))}
                                 </div>
                             )}
+                        </div>
+                    )}
+                    {(LINE_BIND_BONUS_AMOUNT > 0 || storeConfig?.cashbackRate > 0) && (
+                        <div className="flex items-center justify-center gap-2 flex-wrap bg-[#FFF8EE] border border-[#F0DFC0] rounded-full px-4 py-2 text-[10px] font-black text-[#8A6D3B]">
+                            {LINE_BIND_BONUS_AMOUNT > 0 && <span>🎁 新會員送 ${LINE_BIND_BONUS_AMOUNT} 購物金</span>}
+                            {LINE_BIND_BONUS_AMOUNT > 0 && storeConfig?.cashbackRate > 0 && <span className="opacity-40">・</span>}
+                            {storeConfig?.cashbackRate > 0 && <span>💰 每筆訂單回饋 {Math.round(storeConfig.cashbackRate * 1000) / 10}% 購物金</span>}
                         </div>
                     )}
                     <div className="relative">
