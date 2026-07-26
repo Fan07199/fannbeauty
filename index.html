@@ -399,12 +399,13 @@
                       return Math.round(eTotal * (100 - pct) / 100);
                   }
                   case 'threshold': {
-                      // ✅ 階梯式滿額折：找出符合資格的門檻中金額最高的那一階套用（不是每階疊加），跟後台邏輯一致
+                      // ✅ 階梯式門檻：依「滿額」或「件數」（包色任選幾件）找出符合資格中最高的那一階套用（不是每階疊加），跟後台邏輯一致
                       const tiers = Array.isArray(promo.tiers) && promo.tiers.length > 0
                           ? promo.tiers
                           : (promo.threshold ? [{ threshold: promo.threshold, discount: promo.thresholdDiscount }] : []);
+                      const basisValue = promo.tierBasis === 'qty' ? eQty : eTotal;
                       const applicable = tiers
-                          .filter(t => eTotal >= (Number(t.threshold) || 0))
+                          .filter(t => basisValue >= (Number(t.threshold) || 0))
                           .sort((a, b) => (Number(b.threshold) || 0) - (Number(a.threshold) || 0))[0];
                       return applicable ? (Number(applicable.discount) || 0) : 0;
                   }
@@ -422,7 +423,8 @@
                           ? promo.tiers
                           : (promo.threshold ? [{ threshold: promo.threshold, discount: promo.thresholdDiscount }] : []))
                           .slice().sort((a, b) => (Number(a.threshold) || 0) - (Number(b.threshold) || 0));
-                      return tiers.map(t => `滿$${t.threshold}折$${t.discount}`).join('、');
+                      const fmt = promo.tierBasis === 'qty' ? (t => `任選${t.threshold}件折$${t.discount}`) : (t => `滿$${t.threshold}折$${t.discount}`);
+                      return tiers.map(fmt).join('、');
                   }
                   default: return '';
               }
