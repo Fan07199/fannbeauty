@@ -304,6 +304,7 @@
           const [priceBook, setPriceBook] = useState({}); // 品名用
           const [promotion, setPromotion] = useState(null); // ✅ 促銷活動
           const [promotion2, setPromotion2] = useState(null); // ✅ 加碼優惠（疊加在第一組之後）
+          const [earlyBird, setEarlyBird] = useState(null); // ✅ 早鳥折扣（第三層，整單適用，永遠疊在最後）
           const [dataLoaded, setDataLoaded] = useState(false);
           const [toast, setToast] = useState({ show: false, msg: '', type: 'success' });
           const toastTimer = useRef(null);
@@ -450,12 +451,30 @@
                   default: return '';
               }
           };
-          // ✅ 合併兩組優惠文案，兩組都在跑就串在一起顯示
-          const combinedPromoTeaserText = (promo1, promo2) => {
+          // ✅ 早鳥折扣：第三層，永遠疊在前兩組促銷折完之後，用剩下的商品小計再打一次折（不分品項，整單適用）
+          const calcEarlyBirdDiscount = (eb, remainingAfterPromos, locked = false) => {
+              if (!eb || remainingAfterPromos <= 0) return 0;
+              if (!locked && !isPromoActive(eb)) return 0;
+              const pct = Number(eb.percent) || 100;
+              return Math.round(remainingAfterPromos * (100 - pct) / 100);
+          };
+          // ✅ 總折扣＝兩組促銷疊加後，再疊早鳥折扣。itemTotal 為商品小計（不含運費）
+          const calcGrandDiscount = (codeGroups, itemTotal, promo1, locked1, promo2, locked2, earlyBird, lockedEB) => {
+              const promoDiscount = calcTotalDiscount(codeGroups, promo1, locked1, promo2, locked2);
+              const remaining = Math.max(0, itemTotal - promoDiscount);
+              const ebDiscount = earlyBird ? calcEarlyBirdDiscount(earlyBird, remaining, lockedEB) : 0;
+              return promoDiscount + ebDiscount;
+          };
+          // ✅ 合併促銷文案，兩組促銷＋早鳥都在跑就串在一起顯示
+          const combinedPromoTeaserText = (promo1, promo2, earlyBird) => {
               const t1 = isPromoActive(promo1) ? promoTeaserText(promo1) : '';
               const t2 = isPromoActive(promo2) ? promoTeaserText(promo2) : '';
-              if (t1 && t2) return `${t1} + ${t2}（加碼）`;
-              return t1 || t2;
+              let text = (t1 && t2) ? `${t1} + ${t2}（加碼）` : (t1 || t2);
+              if (isPromoActive(earlyBird)) {
+                  const ebText = `整單 ${earlyBird.percent} 折`;
+                  text = text ? `${text} + ${ebText}` : ebText;
+              }
+              return text;
           };
 
           const showMessage = (msg, type = 'success') => {
@@ -591,12 +610,18 @@
                 else setPromotion2(null);
             }, err => console.error("Promo2 sync error:", err));
 
+            // ✅ 早鳥折扣（第三層，整單適用）
+            const unsubEarlyBird = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'earlyBird'), d => {
+                if (d.exists()) setEarlyBird(d.data());
+                else setEarlyBird(null);
+            }, err => console.error("EarlyBird sync error:", err));
+
             // ✅ 新增：監聽歸檔訂單（讓客人能查永久歷史）
             const unsubArchived = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'archivedOrders'), snap => {
                 setArchivedOrders(snap.docs.map(d => ({ ...d.data(), id: d.id, _archived: true })));
             }, err => console.error("Archived sync error:", err));
 
-            return () => { unsubOrders(); unsubStore(); unsubCredits(); unsubPrice(); unsubPromo(); unsubPromo2(); unsubArchived(); };
+            return () => { unsubOrders(); unsubStore(); unsubCredits(); unsubPrice(); unsubPromo(); unsubPromo2(); unsubEarlyBird(); unsubArchived(); };
           }, [user]);
 
           // ✅ 開場選單用：不需要帶連結，自動查有沒有進行中的紅包活動可以顯眼推薦
@@ -785,6 +810,9 @@
                 if (o.promoSnapshot2 && !group.promoSnapshot2) {
                     group.promoSnapshot2 = o.promoSnapshot2;
                 }
+                if (o.earlyBirdSnapshot && !group.earlyBirdSnapshot) {
+                    group.earlyBirdSnapshot = o.earlyBirdSnapshot;
+                }
             });
 
             // 計算每組的小計
@@ -815,10 +843,10 @@
                 const orderTime = g.date?.seconds ? new Date(g.date.seconds * 1000) : new Date();
                 const r1 = resolvePromo(g.promoSnapshot, promotion, orderTime);
                 const r2 = resolvePromo(g.promoSnapshot2, promotion2, orderTime);
-                g.promoDiscount = calcTotalDiscount(g.codeGroups, r1.promo, r1.locked, r2.promo, r2.locked);
-                const label1 = r1.promo ? (r1.promo.name || '促銷折扣') : '';
-                const label2 = r2.promo ? (r2.promo.name || '加碼優惠') : '';
-                g.promoName = label1 && label2 ? `${label1} + ${label2}（加碼）` : (label1 || label2);
+                const rEB = resolvePromo(g.earlyBirdSnapshot, earlyBird, orderTime);
+                g.promoDiscount = calcGrandDiscount(g.codeGroups, g.itemTotal, r1.promo, r1.locked, r2.promo, r2.locked, rEB.promo, rEB.locked);
+                const activeNames = [r1.promo?.name, r2.promo?.name, rEB.promo?.name].filter(Boolean);
+                g.promoName = activeNames.length > 0 ? activeNames.join(' + ') : (g.promoDiscount > 0 ? '促銷折扣' : '');
                 g.creditApplied = g.creditApplied || 0;
                 g.finalTotal = Math.max(0, baseTotal - g.promoDiscount - g.creditApplied);
                 g.creditBalance = storeCredits[g.name]?.balance || 0;
@@ -829,7 +857,7 @@
                 currentOrder: allGroups[0] || null,
                 pastOrders: allGroups.slice(1)
             };
-          }, [isLoggedIn, orders, archivedOrders, searchName, storeConfig.freeShippingThreshold, storeConfig.shippingFee, storeCredits, promotion, promotion2]);
+          }, [isLoggedIn, orders, archivedOrders, searchName, storeConfig.freeShippingThreshold, storeConfig.shippingFee, storeCredits, promotion, promotion2, earlyBird]);
 
           // ✅ 為了相容舊代碼，保留 myOrder 變數
           const myOrder = currentOrder;
@@ -1262,16 +1290,14 @@
                             </div>
                         </div>
                     )}
-                    {(isPromoActive(promotion) || isPromoActive(promotion2)) && (
+                    {(isPromoActive(promotion) || isPromoActive(promotion2) || isPromoActive(earlyBird)) && (
                         <div className="w-full bg-gradient-to-r from-[#FFF3E0] to-[#FFE8CC] rounded-[1.75rem] px-5 py-4 border border-[#FFD580] flex items-center gap-3">
                             <span className="text-2xl shrink-0">🔥</span>
                             <div className="min-w-0">
                                 <div className="text-[12px] font-black text-[#E07B00] truncate">
-                                    {isPromoActive(promotion) && isPromoActive(promotion2)
-                                        ? `${promotion.name || '限時優惠'} + ${promotion2.name || '加碼優惠'}進行中`
-                                        : `${(isPromoActive(promotion) ? promotion : promotion2).name || '限時優惠'}進行中`}
+                                    {[promotion, promotion2, earlyBird].filter(p => isPromoActive(p)).map(p => p.name || '限時優惠').join(' + ')}進行中
                                 </div>
-                                <div className="text-[11px] font-bold text-[#8A6D3B] mt-0.5 truncate">{combinedPromoTeaserText(promotion, promotion2)}</div>
+                                <div className="text-[11px] font-bold text-[#8A6D3B] mt-0.5 truncate">{combinedPromoTeaserText(promotion, promotion2, earlyBird)}</div>
                             </div>
                         </div>
                     )}
