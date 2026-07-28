@@ -38,6 +38,23 @@
     <link rel="preconnect" href="https://firestore.googleapis.com" crossorigin>
     <link rel="preconnect" href="https://firebasestorage.googleapis.com" crossorigin>
 
+    <!-- ✅ Meta (Facebook/Instagram) Pixel：用於 IG 廣告投放的轉換追蹤與再行銷 -->
+    <script>
+    !function(f,b,e,v,n,t,s)
+    {if(f.fbq)return;n=f.fbq=function(){n.callMethod?
+    n.callMethod.apply(n,arguments):n.queue.push(arguments)};
+    if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';
+    n.queue=[];t=b.createElement(e);t.async=!0;
+    t.src=v;s=b.getElementsByTagName(e)[0];
+    s.parentNode.insertBefore(t,s)}(window, document,'script',
+    'https://connect.facebook.net/en_US/fbevents.js');
+    fbq('init', '1250520340402880');
+    fbq('track', 'PageView');
+    </script>
+    <noscript><img height="1" width="1" style="display:none"
+    src="https://www.facebook.com/tr?id=1250520340402880&ev=PageView&noscript=1"
+    /></noscript>
+
     <!-- ✅ 效能優化：加 defer，避免這兩個較大的指令碼卡住頁面初始畫面顯示 -->
     <script src="https://cdn.tailwindcss.com" defer></script>
     <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400..900;1,400..900&family=DM+Serif+Display:ital@0;1&family=Cormorant+Garamond:wght@400;500;600;700&family=Noto+Sans+TC:wght@400;500;700;900&display=swap" rel="stylesheet">
@@ -1031,6 +1048,15 @@
                   return { ...prev, [key]: { product, spec, qty: (cur?.qty || 0) + 1 } };
               });
               showMessage(`已加入 ${product.name}${spec ? ` (${spec})` : ''}`);
+              // ✅ Meta Pixel：加入購物車事件，供 IG 廣告優化與再行銷用
+              if (typeof fbq !== 'undefined') {
+                  fbq('track', 'AddToCart', {
+                      content_name: product.name,
+                      content_ids: [product.code || product.id],
+                      value: Number(product.price) || 0,
+                      currency: 'TWD'
+                  });
+              }
           };
           const changeQty = (key, delta) => {
               setCart(prev => {
@@ -1121,7 +1147,17 @@
                   });
                   // ✅ 記下這次下單摘要，供「通知賣家」使用
                   const summaryList = cartItems.map(i => `${i.product.name}${i.spec ? ` (${i.spec})` : ''} x${i.qty}`).join('\n');
-                  setJustOrdered({ name, list: summaryList, total: Math.max(0, cartGrandTotal - creditApplied), shippingFee: cartShippingFee });
+                  const orderTotal = Math.max(0, cartGrandTotal - creditApplied);
+                  setJustOrdered({ name, list: summaryList, total: orderTotal, shippingFee: cartShippingFee });
+                  // ✅ Meta Pixel：訂單成立事件，供 IG 廣告投報率（ROAS）計算用
+                  if (typeof fbq !== 'undefined') {
+                      fbq('track', 'Purchase', {
+                          value: orderTotal,
+                          currency: 'TWD',
+                          content_ids: cartItems.map(i => i.product.code || i.product.id),
+                          num_items: cartItems.reduce((s, i) => s + i.qty, 0)
+                      });
+                  }
                   setCart({});
                   setShowConfirm(false);
                   try { localStorage.setItem(NAME_KEY, name); } catch {}
