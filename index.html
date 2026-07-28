@@ -36,6 +36,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="preconnect" href="https://firestore.googleapis.com" crossorigin>
+    <link rel="preconnect" href="https://firebasestorage.googleapis.com" crossorigin>
 
     <!-- ✅ 效能優化：加 defer，避免這兩個較大的指令碼卡住頁面初始畫面顯示 -->
     <script src="https://cdn.tailwindcss.com" defer></script>
@@ -299,7 +300,15 @@
           const [searchName, setSearchName] = useState(_urlName || _savedName);
           const [orders, setOrders] = useState([]);
           const [archivedOrders, setArchivedOrders] = useState([]); // ✅ 新增：歷史歸檔
-          const [storeConfig, setStoreConfig] = useState({ myshipUrl: '', freeShippingThreshold: 1500, shippingFee: 38 });
+          // ✅ 先用上次快取的設定值渲染（避免首頁會員好康卡片每次都要等 Firestore 回應才慢半拍跳出來），
+          // 拿到最新資料後再無感更新
+          const [storeConfig, setStoreConfig] = useState(() => {
+              try {
+                  const cached = localStorage.getItem('fann-shop-storeconfig-cache');
+                  if (cached) return JSON.parse(cached);
+              } catch {}
+              return { myshipUrl: '', freeShippingThreshold: 1500, shippingFee: 38 };
+          });
           const [storeCredits, setStoreCredits] = useState({}); // 購物金
           const [priceBook, setPriceBook] = useState({}); // 品名用
           const [promotion, setPromotion] = useState(null); // ✅ 促銷活動
@@ -584,7 +593,11 @@
             }, err => console.error("Orders sync error:", err));
 
             const unsubStore = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'storeConfig'), d => {
-                if (d.exists()) setStoreConfig(d.data());
+                if (d.exists()) {
+                    const config = d.data();
+                    setStoreConfig(config);
+                    try { localStorage.setItem('fann-shop-storeconfig-cache', JSON.stringify(config)); } catch {}
+                }
             }, err => console.error("Config sync error:", err));
 
             const unsubCredits = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'storeCredits'), snap => {
@@ -1261,7 +1274,7 @@
                   <div className="mt-2 space-y-4 animate-in">
                     {storeConfig.bannerImages && storeConfig.bannerImages.length > 0 && (
                         <div className="relative rounded-[2rem] overflow-hidden shadow-xl aspect-[4/5]">
-                            <img src={storeConfig.bannerImages[0]} alt="" className="w-full h-full object-cover"/>
+                            <img src={storeConfig.bannerImages[0]} alt="" fetchpriority="high" decoding="async" className="w-full h-full object-cover"/>
                             <div className="absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent"/>
                             <div className="absolute bottom-5 left-5 right-5 text-white">
                                 <p className="text-[10px] font-bold tracking-[0.3em] uppercase opacity-80">Fann.Beauty</p>
@@ -1389,7 +1402,7 @@
                           {pendingAdd && (
                             <div className="flex items-center gap-3 bg-[#F5F1EA] rounded-2xl p-3 mb-1">
                                 <div className="w-12 h-12 rounded-xl bg-white overflow-hidden flex items-center justify-center shrink-0">
-                                    {pendingAdd.image ? <img src={pendingAdd.image} className="w-full h-full object-cover"/> : <ShoppingBag size={18} className="text-[#C9BCA8]"/>}
+                                    {pendingAdd.image ? <img src={pendingAdd.image} decoding="async" className="w-full h-full object-cover"/> : <ShoppingBag size={18} className="text-[#C9BCA8]"/>}
                                 </div>
                                 <div className="min-w-0">
                                     <div className="text-[13px] font-black text-[#3A3A3A] truncate">{pendingAdd.name}</div>
@@ -1403,7 +1416,7 @@
                             // 這時才需要請客人自己輸入
                             <>
                               <div className="flex items-center gap-3 bg-[#EAF7EE] border border-[#BFE5CB] rounded-2xl px-4 py-3">
-                                  {lineProfile.pictureUrl && <img src={lineProfile.pictureUrl} className="w-9 h-9 rounded-full shrink-0" alt=""/>}
+                                  {lineProfile.pictureUrl && <img src={lineProfile.pictureUrl} decoding="async" className="w-9 h-9 rounded-full shrink-0" alt=""/>}
                                   <div className="min-w-0 text-[11px] font-black text-[#2E7D46]">已透過 LINE 登入 ✅，請輸入您的暱稱完成最後一步</div>
                               </div>
                               <div className="relative">
@@ -2056,7 +2069,7 @@
                                             }}
                                             className="aspect-[3/4] bg-[#F5F1EA] flex overflow-x-auto snap-x snap-mandatory scrollbar-hide">
                                             {imgs.map((url, i) => (
-                                                <img key={i} src={url} alt={detailProduct.name} className="w-full h-full object-cover shrink-0 snap-center"/>
+                                                <img key={i} src={url} alt={detailProduct.name} loading={i === 0 ? undefined : 'lazy'} decoding="async" className="w-full h-full object-cover shrink-0 snap-center"/>
                                             ))}
                                         </div>
                                         {imgs.length > 1 && (
@@ -2194,7 +2207,7 @@
                         <div className="w-9 h-1 bg-[#EDE6DA] rounded-full mx-auto"/>
                         <div className="flex items-center gap-3">
                             <div className="w-16 h-16 rounded-2xl bg-[#F5F1EA] overflow-hidden flex items-center justify-center shrink-0">
-                                {specModal.product.image ? <img src={specModal.product.image} className="w-full h-full object-cover"/> : <ShoppingBag size={22} className="text-[#C9BCA8]"/>}
+                                {specModal.product.image ? <img src={specModal.product.image} decoding="async" className="w-full h-full object-cover"/> : <ShoppingBag size={22} className="text-[#C9BCA8]"/>}
                             </div>
                             <div className="min-w-0">
                                 <div className="font-black text-sm text-[#3A3A3A] truncate">{specModal.product.name}</div>
@@ -2247,7 +2260,7 @@
                                 return (
                                     <div key={idx} className="flex items-center gap-3 bg-white rounded-2xl p-3 border border-[#EDE6DA]">
                                         <div className="w-14 h-14 rounded-xl bg-[#F5F1EA] overflow-hidden flex items-center justify-center shrink-0">
-                                            {item.product.image ? <img src={item.product.image} className="w-full h-full object-cover"/> : <ShoppingBag size={18} className="text-[#C9BCA8]"/>}
+                                            {item.product.image ? <img src={item.product.image} loading="lazy" decoding="async" className="w-full h-full object-cover"/> : <ShoppingBag size={18} className="text-[#C9BCA8]"/>}
                                         </div>
                                         <div className="flex-1 min-w-0">
                                             <div className="font-bold text-[13px] text-[#3A3A3A] truncate">{item.product.name}</div>
@@ -2442,7 +2455,7 @@
                                 className="flex overflow-x-auto snap-x snap-mandatory scrollbar-hide rounded-[1.75rem] shadow-sm">
                                 {bannerImages.map((url, i) => (
                                     <div key={i} className="relative w-full shrink-0 snap-center aspect-[4/5]">
-                                        <img src={url} alt="" className="w-full h-full object-cover"/>
+                                        <img src={url} alt="" loading={i === 0 ? undefined : 'lazy'} decoding="async" className="w-full h-full object-cover"/>
                                         <div className="absolute inset-0 bg-gradient-to-t from-black/45 via-transparent to-transparent"/>
                                     </div>
                                 ))}
@@ -2494,7 +2507,7 @@
                                 return (
                                     <div key={p.id} className={`bg-white rounded-[1.5rem] overflow-hidden shadow-sm border border-white flex flex-col ${soldOut ? 'opacity-60' : ''}`}>
                                         <button onClick={() => setDetailProduct(p)} className="aspect-[3/4] bg-[#F5F1EA] flex items-center justify-center overflow-hidden relative">
-                                            {p.image ? <img src={p.image} alt={p.name} loading="lazy" className="w-full h-full object-cover"/> : <ShoppingBag size={32} className="text-[#C9BCA8]"/>}
+                                            {p.image ? <img src={p.image} alt={p.name} loading="lazy" decoding="async" className="w-full h-full object-cover"/> : <ShoppingBag size={32} className="text-[#C9BCA8]"/>}
                                             {p.category && <span className="absolute top-2 left-2 bg-white/85 text-[#8A6D3B] text-[9px] font-black px-2 py-0.5 rounded-full">{p.category}</span>}
                                             {soldOut && (
                                                 <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
