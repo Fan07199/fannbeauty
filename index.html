@@ -1154,7 +1154,8 @@
                   });
                   // ✅ 記下這次下單摘要，供「通知賣家」使用
                   const summaryList = cartItems.map(i => `${i.product.name}${i.spec ? ` (${i.spec})` : ''} x${i.qty}`).join('\n');
-                  const orderTotal = Math.max(0, cartGrandTotal - creditApplied);
+                  // ✅ 一定要把促銷折扣也扣掉，不然客人看到／回報給賣家的金額會比實際應付高（少算了折扣）
+                  const orderTotal = Math.max(0, cartGrandTotal - cartEstimatedDiscount - creditApplied);
                   setJustOrdered({ name, list: summaryList, total: orderTotal, shippingFee: cartShippingFee });
                   // ✅ Meta Pixel：訂單成立事件，供 IG 廣告投報率（ROAS）計算用
                   if (typeof fbq !== 'undefined') {
