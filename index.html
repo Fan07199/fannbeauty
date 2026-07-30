@@ -866,9 +866,8 @@
                     total += cg.subtotal;
                 });
                 g.itemTotal = total;
-                g.hasShippingFee = g.itemTotal < threshold && g.itemTotal > 0;
                 g.shippingFeeAmt = shippingFeeAmt;
-                const baseTotal = g.hasShippingFee ? g.itemTotal + shippingFeeAmt : g.itemTotal;
+                g.creditApplied = g.creditApplied || 0;
                 // ✅ 促銷折扣（優先用訂單鎖住的快照，日期過了也不變；支援雙促銷疊加）
                 const orderTime = g.date?.seconds ? new Date(g.date.seconds * 1000) : new Date();
                 const r1 = resolvePromo(g.promoSnapshot, promotion, orderTime);
@@ -877,7 +876,10 @@
                 g.promoDiscount = calcGrandDiscount(g.codeGroups, g.itemTotal, r1.promo, r1.locked, r2.promo, r2.locked, rEB.promo, rEB.locked);
                 const activeNames = [r1.promo?.name, r2.promo?.name, rEB.promo?.name].filter(Boolean);
                 g.promoName = activeNames.length > 0 ? activeNames.join(' + ') : (g.promoDiscount > 0 ? '促銷折扣' : '');
-                g.creditApplied = g.creditApplied || 0;
+                // ✅ 免運門檻改看折扣＋購物金折抵後的金額
+                const payableForShipping = Math.max(0, g.itemTotal - g.promoDiscount - g.creditApplied);
+                g.hasShippingFee = payableForShipping < threshold && g.itemTotal > 0;
+                const baseTotal = g.hasShippingFee ? g.itemTotal + shippingFeeAmt : g.itemTotal;
                 g.finalTotal = Math.max(0, baseTotal - g.promoDiscount - g.creditApplied);
                 g.creditBalance = storeCredits[g.name]?.balance || 0;
                 return g;
@@ -957,10 +959,6 @@
           const cartItems = useMemo(() => Object.values(cart), [cart]);
           const cartCount = useMemo(() => cartItems.reduce((s, i) => s + i.qty, 0), [cartItems]);
           const cartTotal = useMemo(() => cartItems.reduce((s, i) => s + Number(i.product.price || 0) * i.qty, 0), [cartItems]);
-          // ✅ 讓客人結帳前就看得到含運費的實際金額，不用等下單完成後才知道
-          const cartHasShippingFee = cartTotal > 0 && cartTotal < (storeConfig.freeShippingThreshold || 1500);
-          const cartShippingFee = cartHasShippingFee ? (storeConfig.shippingFee ?? 38) : 0;
-          const cartGrandTotal = cartTotal + cartShippingFee;
 
           // ✅ 購物車目前的商品依代碼分組（跟訂單 itemCode 邏輯一致），用來判斷是否達到促銷門檻
           const cartCodeGroups = useMemo(() => {
@@ -973,6 +971,19 @@
               });
               return groups;
           }, [cartItems]);
+
+          // ✅ 結帳前的「預估」折扣：只是先讓客人看一下大概會折多少，實際金額仍以賣家對帳結算為準
+          // （因為促銷門檻是看客人當天所有訂單合併計算，這裡只算得出「目前這張購物車單獨送出」的結果）
+          const cartEstimatedDiscount = useMemo(() => {
+              if (cartTotal <= 0) return 0;
+              return calcGrandDiscount(cartCodeGroups, cartTotal, promotion, false, promotion2, false, earlyBird, false);
+          }, [cartCodeGroups, cartTotal, promotion, promotion2, earlyBird]);
+
+          // ✅ 讓客人結帳前就看得到含運費的實際金額，不用等下單完成後才知道
+          // 免運門檻改看「折扣後」的金額（購物金要進到結帳畫面才會選，這裡先不算購物金）
+          const cartHasShippingFee = cartTotal > 0 && Math.max(0, cartTotal - cartEstimatedDiscount) < (storeConfig.freeShippingThreshold || 1500);
+          const cartShippingFee = cartHasShippingFee ? (storeConfig.shippingFee ?? 38) : 0;
+          const cartGrandTotal = cartTotal + cartShippingFee;
 
           // ✅ 下單前提醒：離免運門檻、離下一階優惠門檻還差多少
           const cartNudges = useMemo(() => {
@@ -1003,13 +1014,6 @@
               addTierNudge(promotion2, 'promo2', '✨');
               return nudges;
           }, [cartCodeGroups, cartTotal, storeConfig.freeShippingThreshold, promotion, promotion2]);
-
-          // ✅ 結帳前的「預估」折扣：只是先讓客人看一下大概會折多少，實際金額仍以賣家對帳結算為準
-          // （因為促銷門檻是看客人當天所有訂單合併計算，這裡只算得出「目前這張購物車單獨送出」的結果）
-          const cartEstimatedDiscount = useMemo(() => {
-              if (cartTotal <= 0) return 0;
-              return calcGrandDiscount(cartCodeGroups, cartTotal, promotion, false, promotion2, false, earlyBird, false);
-          }, [cartCodeGroups, cartTotal, promotion, promotion2, earlyBird]);
 
           const startAdd = (product) => {
               // ✅ 有設定庫存且已賣完，不能再加購
