@@ -25,14 +25,17 @@ if (!admin.apps.length) {
     });
 }
 
-const SITE_URL = 'https://fannbeauty.vercel.app';
+const FALLBACK_SITE_URL = 'https://www.fann-beauty.com';
 const APP_ID = 'fann-beauty-production-v1'; // ✅ 要跟 index.html / admin.html 裡的 appId 常數一致
-const DEFAULT_IMAGE = `${SITE_URL}/logo.png`;
 
 const escapeHtml = (str) => String(str || '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 module.exports = async function handler(req, res) {
+    // ✅ 用實際被請求的網域組連結，不管客人是從新網域還是舊的 fannbeauty.vercel.app
+    // 點進這支 API，導回去的都是同一個網域，不會被硬導去舊網址
+    const SITE_URL = req.headers.host ? `https://${req.headers.host}` : FALLBACK_SITE_URL;
+    const DEFAULT_IMAGE = `${SITE_URL}/logo.png`;
     const id = typeof req.query.id === 'string' ? req.query.id : '';
     const productUrl = id ? `${SITE_URL}/?product=${encodeURIComponent(id)}` : SITE_URL;
 
