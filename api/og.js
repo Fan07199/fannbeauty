@@ -39,8 +39,8 @@ module.exports = async function handler(req, res) {
     const id = typeof req.query.id === 'string' ? req.query.id : '';
     const productUrl = id ? `${SITE_URL}/?product=${encodeURIComponent(id)}` : SITE_URL;
 
-    let title = 'Fann.Beauty｜選購';
-    let description = '精選女裝選購頁';
+    let title = 'Fann.Beauty｜官網';
+    let description = 'Fann.Beauty 官方網站';
     let image = DEFAULT_IMAGE;
 
     if (id && process.env.FIREBASE_PROJECT_ID) {
