@@ -10,8 +10,8 @@ const crypto = require('crypto');
 const TEST_CREDENTIALS = { hashKey: '5294y06JbISpM5x9', hashIv: 'v77hoKGq4kWxNNIS' };
 const isProd = (process.env.ECPAY_STAGE || '').trim().toLowerCase() === 'prod';
 const LOGISTICS_HOST = isProd ? 'https://logistics.ecpay.com.tw' : 'https://logistics-stage.ecpay.com.tw';
-const HASH_KEY = process.env.ECPAY_HASH_KEY || TEST_CREDENTIALS.hashKey;
-const HASH_IV = process.env.ECPAY_HASH_IV || TEST_CREDENTIALS.hashIv;
+const HASH_KEY = isProd ? (process.env.ECPAY_HASH_KEY || TEST_CREDENTIALS.hashKey) : TEST_CREDENTIALS.hashKey;
+const HASH_IV = isProd ? (process.env.ECPAY_HASH_IV || TEST_CREDENTIALS.hashIv) : TEST_CREDENTIALS.hashIv;
 
 const ecpayUrlEncode = (str) => encodeURIComponent(str)
     .replace(/%20/g, '+').replace(/%2d/gi, '-').replace(/%5f/gi, '_')
