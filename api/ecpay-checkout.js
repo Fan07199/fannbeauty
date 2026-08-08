@@ -39,9 +39,11 @@ const TEST_CREDENTIALS = {
 
 const isProd = (process.env.ECPAY_STAGE || '').trim().toLowerCase() === 'prod';
 const ECPAY_HOST = isProd ? 'https://payment.ecpay.com.tw' : 'https://payment-stage.ecpay.com.tw';
-const MERCHANT_ID = process.env.ECPAY_MERCHANT_ID || TEST_CREDENTIALS.merchantId;
-const HASH_KEY = process.env.ECPAY_HASH_KEY || TEST_CREDENTIALS.hashKey;
-const HASH_IV = process.env.ECPAY_HASH_IV || TEST_CREDENTIALS.hashIv;
+// ✅ 測試站一律用公開測試金鑰，不管環境變數裡的正式金鑰有沒有設定，避免「測試站+正式金鑰」這種
+// 兩邊對不起來的組合（正式金鑰在測試站上一定會被拒絕，跟金鑰打錯字的錯誤訊息一模一樣，很容易誤判）
+const MERCHANT_ID = isProd ? (process.env.ECPAY_MERCHANT_ID || TEST_CREDENTIALS.merchantId) : TEST_CREDENTIALS.merchantId;
+const HASH_KEY = isProd ? (process.env.ECPAY_HASH_KEY || TEST_CREDENTIALS.hashKey) : TEST_CREDENTIALS.hashKey;
+const HASH_IV = isProd ? (process.env.ECPAY_HASH_IV || TEST_CREDENTIALS.hashIv) : TEST_CREDENTIALS.hashIv;
 
 // ✅ 綠界要求的網址編碼規則（.NET 的 UrlEncode 風格），跟 JS 內建的 encodeURIComponent 不完全一樣，
 // 這段字元對照是官方文件規定的，算錯簽章就完全對不上、付款頁會直接打不開
