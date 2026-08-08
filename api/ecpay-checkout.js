@@ -37,7 +37,7 @@ const TEST_CREDENTIALS = {
     hashIv: 'v77hoKGq4kWxNNIS'
 };
 
-const isProd = process.env.ECPAY_STAGE === 'prod';
+const isProd = (process.env.ECPAY_STAGE || '').trim().toLowerCase() === 'prod';
 const ECPAY_HOST = isProd ? 'https://payment.ecpay.com.tw' : 'https://payment-stage.ecpay.com.tw';
 const MERCHANT_ID = process.env.ECPAY_MERCHANT_ID || TEST_CREDENTIALS.merchantId;
 const HASH_KEY = process.env.ECPAY_HASH_KEY || TEST_CREDENTIALS.hashKey;
@@ -206,6 +206,10 @@ module.exports = async function handler(req, res) {
             res.status(400).send('訂單金額為 0，不需要刷卡');
             return;
         }
+
+        // ✅ 除錯用：不含任何密鑰，只印出「用了哪個商店代號、打去正式站還是測試站」，
+        // 方便在 Vercel 的 Logs 分頁對照，確認環境變數有沒有生效
+        console.log('ecpay-checkout debug:', { MERCHANT_ID, isProd, ECPAY_HOST, hasHashKey: !!process.env.ECPAY_HASH_KEY, hasHashIv: !!process.env.ECPAY_HASH_IV, rawStage: process.env.ECPAY_STAGE });
 
         const now = new Date();
         const pad = (n) => String(n).padStart(2, '0');
