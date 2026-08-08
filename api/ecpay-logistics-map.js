@@ -8,12 +8,31 @@
 // 彈出視窗常常會被擋掉或行為不穩定，整頁導頁相容性比較好、比較不會選了門市卻回不去。
 //
 // 需要的環境變數（跟 api/ecpay-checkout.js 共用同一組）：
-//   ECPAY_MERCHANT_ID / ECPAY_STAGE / SITE_URL
+//   ECPAY_MERCHANT_ID / ECPAY_HASH_KEY / ECPAY_HASH_IV / ECPAY_STAGE / SITE_URL
 
+const crypto = require('crypto');
+
+const TEST_CREDENTIALS = { merchantId: '2000132', hashKey: '5294y06JbISpM5x9', hashIv: 'v77hoKGq4kWxNNIS' };
 const isProd = (process.env.ECPAY_STAGE || '').trim().toLowerCase() === 'prod';
 const ECPAY_LOGISTICS_HOST = isProd ? 'https://logistics.ecpay.com.tw' : 'https://logistics-stage.ecpay.com.tw';
-const MERCHANT_ID = isProd ? (process.env.ECPAY_MERCHANT_ID || '2000132') : '2000132'; // 測試環境公開特店編號
+const MERCHANT_ID = isProd ? (process.env.ECPAY_MERCHANT_ID || TEST_CREDENTIALS.merchantId) : TEST_CREDENTIALS.merchantId;
+const HASH_KEY = isProd ? (process.env.ECPAY_HASH_KEY || TEST_CREDENTIALS.hashKey) : TEST_CREDENTIALS.hashKey;
+const HASH_IV = isProd ? (process.env.ECPAY_HASH_IV || TEST_CREDENTIALS.hashIv) : TEST_CREDENTIALS.hashIv;
 const FALLBACK_SITE_URL = 'https://www.fann-beauty.com';
+
+const ecpayUrlEncode = (str) => encodeURIComponent(str)
+    .replace(/%20/g, '+').replace(/%2d/gi, '-').replace(/%5f/gi, '_')
+    .replace(/%2e/gi, '.').replace(/%21/gi, '!').replace(/%2a/gi, '*')
+    .replace(/%28/gi, '(').replace(/%29/gi, ')');
+
+const genCheckMacValue = (params) => {
+    const keys = Object.keys(params).filter(k => k !== 'CheckMacValue').sort((a, b) => a.localeCompare(b));
+    let raw = `HashKey=${HASH_KEY}`;
+    keys.forEach(k => { raw += `&${k}=${params[k]}`; });
+    raw += `&HashIV=${HASH_IV}`;
+    const encoded = ecpayUrlEncode(raw).toLowerCase();
+    return crypto.createHash('sha256').update(encoded).digest('hex').toUpperCase();
+};
 
 const escapeHtml = (str) => String(str || '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -33,6 +52,7 @@ module.exports = async function handler(req, res) {
         IsCollection: 'Y', // ✅ 取貨付款（貨到付款），不是取貨不付款
         ServerReplyURL: `${SITE_URL}/api/ecpay-logistics-callback`
     };
+    params.CheckMacValue = genCheckMacValue(params);
 
     const inputs = Object.entries(params)
         .map(([k, v]) => `<input type="hidden" name="${escapeHtml(k)}" value="${escapeHtml(v)}">`)
