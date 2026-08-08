@@ -10,7 +10,7 @@
 // 需要的環境變數（跟 api/ecpay-checkout.js 共用同一組）：
 //   ECPAY_MERCHANT_ID / ECPAY_STAGE / SITE_URL
 
-const isProd = process.env.ECPAY_STAGE === 'prod';
+const isProd = (process.env.ECPAY_STAGE || '').trim().toLowerCase() === 'prod';
 const ECPAY_LOGISTICS_HOST = isProd ? 'https://logistics.ecpay.com.tw' : 'https://logistics-stage.ecpay.com.tw';
 const MERCHANT_ID = process.env.ECPAY_MERCHANT_ID || '2000132'; // 測試環境公開特店編號
 const FALLBACK_SITE_URL = 'https://www.fann-beauty.com';
