@@ -12,7 +12,7 @@
 
 const isProd = (process.env.ECPAY_STAGE || '').trim().toLowerCase() === 'prod';
 const ECPAY_LOGISTICS_HOST = isProd ? 'https://logistics.ecpay.com.tw' : 'https://logistics-stage.ecpay.com.tw';
-const MERCHANT_ID = process.env.ECPAY_MERCHANT_ID || '2000132'; // 測試環境公開特店編號
+const MERCHANT_ID = isProd ? (process.env.ECPAY_MERCHANT_ID || '2000132') : '2000132'; // 測試環境公開特店編號
 const FALLBACK_SITE_URL = 'https://www.fann-beauty.com';
 
 const escapeHtml = (str) => String(str || '')
