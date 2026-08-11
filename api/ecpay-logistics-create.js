@@ -46,7 +46,9 @@ const genCheckMacValue = (params) => {
     keys.forEach(k => { raw += `&${k}=${params[k]}`; });
     raw += `&HashIV=${HASH_IV}`;
     const encoded = ecpayUrlEncode(raw).toLowerCase();
-    return crypto.createHash('sha256').update(encoded).digest('hex').toUpperCase();
+    // ✅ 注意：物流 API 的檢查碼規定用 MD5，跟金流付款（ecpay-checkout.js 用 SHA256）不一樣，
+    // 這是兩支之前一直對不起來簽章的真正原因
+    return crypto.createHash('md5').update(encoded).digest('hex').toUpperCase();
 };
 
 module.exports = async function handler(req, res) {
@@ -88,6 +90,7 @@ module.exports = async function handler(req, res) {
             LogisticsType: 'CVS',
             LogisticsSubType: 'UNIMARTC2C',
             GoodsAmount: String(totalAmount),
+            CollectionAmount: String(totalAmount), // ✅ IsCollection=Y 時必填，且金額要跟 GoodsAmount 一樣
             IsCollection: 'Y',
             GoodsName: String(goodsName || 'Fann選購商品').slice(0, 50),
             SenderName: String(senderName || 'FannBeauty').slice(0, 10),
