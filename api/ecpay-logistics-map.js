@@ -31,7 +31,8 @@ const genCheckMacValue = (params) => {
     keys.forEach(k => { raw += `&${k}=${params[k]}`; });
     raw += `&HashIV=${HASH_IV}`;
     const encoded = ecpayUrlEncode(raw).toLowerCase();
-    return crypto.createHash('sha256').update(encoded).digest('hex').toUpperCase();
+    // ✅ 物流 API 的檢查碼規定用 MD5，跟金流付款不一樣
+    return crypto.createHash('md5').update(encoded).digest('hex').toUpperCase();
 };
 
 const escapeHtml = (str) => String(str || '')
