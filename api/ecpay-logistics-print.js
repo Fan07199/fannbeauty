@@ -3,13 +3,14 @@
 // 綠界會回傳可以直接列印的 7-11 交貨便託運單條碼頁面（PDF/圖片，由綠界那邊產生）。
 //
 // 需要的環境變數（跟 api/ecpay-checkout.js 共用同一組）：
-//   ECPAY_HASH_KEY / ECPAY_HASH_IV / ECPAY_STAGE
+//   ECPAY_MERCHANT_ID / ECPAY_HASH_KEY / ECPAY_HASH_IV / ECPAY_STAGE
 
 const crypto = require('crypto');
 
-const TEST_CREDENTIALS = { hashKey: '5294y06JbISpM5x9', hashIv: 'v77hoKGq4kWxNNIS' };
+const TEST_CREDENTIALS = { merchantId: '2000132', hashKey: '5294y06JbISpM5x9', hashIv: 'v77hoKGq4kWxNNIS' };
 const isProd = (process.env.ECPAY_STAGE || '').trim().toLowerCase() === 'prod';
 const LOGISTICS_HOST = isProd ? 'https://logistics.ecpay.com.tw' : 'https://logistics-stage.ecpay.com.tw';
+const MERCHANT_ID = isProd ? (process.env.ECPAY_MERCHANT_ID || TEST_CREDENTIALS.merchantId) : TEST_CREDENTIALS.merchantId;
 const HASH_KEY = isProd ? (process.env.ECPAY_HASH_KEY || TEST_CREDENTIALS.hashKey) : TEST_CREDENTIALS.hashKey;
 const HASH_IV = isProd ? (process.env.ECPAY_HASH_IV || TEST_CREDENTIALS.hashIv) : TEST_CREDENTIALS.hashIv;
 
@@ -38,7 +39,7 @@ module.exports = async function handler(req, res) {
         return;
     }
 
-    const params = { AllPayLogisticsID: logisticsId };
+    const params = { MerchantID: MERCHANT_ID, AllPayLogisticsID: logisticsId };
     params.CheckMacValue = genCheckMacValue(params);
 
     const inputs = Object.entries(params)
