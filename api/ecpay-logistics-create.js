@@ -69,11 +69,14 @@ module.exports = async function handler(req, res) {
         return;
     }
 
-    const { orderIds, goodsName, amount, receiverName, receiverPhone, cvsStoreId, senderName, senderPhone } = req.body || {};
+    const { orderIds, goodsName, amount, receiverName, receiverPhone, cvsStoreId, senderName, senderPhone, isCollection } = req.body || {};
     if (!Array.isArray(orderIds) || orderIds.length === 0) { res.status(400).json({ error: '缺少訂單 ID' }); return; }
     if (!cvsStoreId || !receiverName || !receiverPhone) { res.status(400).json({ error: '缺少門市代號或收件人資訊' }); return; }
     const totalAmount = Math.round(Number(amount) || 0);
-    if (totalAmount <= 0 || totalAmount > 20000) { res.status(400).json({ error: '金額異常（7-11 取貨付款單筆上限為 $20,000）' }); return; }
+    if (totalAmount <= 0 || totalAmount > 20000) { res.status(400).json({ error: '金額異常（7-11 取貨單筆上限為 $20,000）' }); return; }
+    // ✅ 貨到付款訂單（isCollection 沒帶或 true）才需要跟客人收錢；信用卡已經先線上刷卡付過款了，
+    // 這種就不用再貨到收款，IsCollection 要設 'N'，CollectionAmount 也不能帶
+    const collectOnDelivery = isCollection !== false;
 
     const SITE_URL = process.env.SITE_URL || FALLBACK_SITE_URL;
 
@@ -90,8 +93,8 @@ module.exports = async function handler(req, res) {
             LogisticsType: 'CVS',
             LogisticsSubType: 'UNIMARTC2C',
             GoodsAmount: String(totalAmount),
-            CollectionAmount: String(totalAmount), // ✅ IsCollection=Y 時必填，且金額要跟 GoodsAmount 一樣
-            IsCollection: 'Y',
+            ...(collectOnDelivery ? { CollectionAmount: String(totalAmount) } : {}), // ✅ 只有 IsCollection=Y（貨到付款）才能帶這個欄位，金額要跟 GoodsAmount 一樣
+            IsCollection: collectOnDelivery ? 'Y' : 'N',
             GoodsName: String(goodsName || 'Fann選購商品').slice(0, 50),
             SenderName: String(senderName || 'FannBeauty').slice(0, 10),
             SenderCellPhone: String(senderPhone || '').replace(/\D/g, '').slice(0, 20),
