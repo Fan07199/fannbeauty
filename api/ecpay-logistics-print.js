@@ -38,8 +38,21 @@ module.exports = async function handler(req, res) {
         res.status(400).send('缺少或格式錯誤的託運單編號');
         return;
     }
+    // ⚠️ 光帶 AllPayLogisticsID 綠界會查不到寄貨編號（跳出 CVSPaymentNo is null），
+    // 一定要把查詢訂單時拿到的 CVSPaymentNo/CVSValidationNo 也一起帶過去才能正確列印
+    const cvsPaymentNo = typeof req.query.cvsPaymentNo === 'string' ? req.query.cvsPaymentNo : '';
+    const cvsValidationNo = typeof req.query.cvsValidationNo === 'string' ? req.query.cvsValidationNo : '';
+    if (!cvsPaymentNo || !cvsValidationNo) {
+        res.status(400).send('缺少寄貨編號，請先在後台重新查詢最新狀態');
+        return;
+    }
 
-    const params = { MerchantID: MERCHANT_ID, AllPayLogisticsID: logisticsId };
+    const params = {
+        MerchantID: MERCHANT_ID,
+        AllPayLogisticsID: logisticsId,
+        CVSPaymentNo: cvsPaymentNo,
+        CVSValidationNo: cvsValidationNo
+    };
     params.CheckMacValue = genCheckMacValue(params);
 
     const inputs = Object.entries(params)
