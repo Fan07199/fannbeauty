@@ -119,7 +119,13 @@ module.exports = async function handler(req, res) {
         const rtnCode = resultParams.get('RtnCode');
         const rtnMsg = resultParams.get('RtnMsg') || '';
 
-        if (rtnCode !== '1') {
+        const allPayLogisticsID = resultParams.get('AllPayLogisticsID') || '';
+
+        // ✅ 綠界物流有時候不會馬上回最終結果，RtnCode 不是 1、但已經有給 AllPayLogisticsID，
+        // 訊息像是「訂單處理中(綠界已收到訂單資料)」——這種情況先存成「處理中」，
+        // 真正的最終結果（含 CVSPaymentNo/CVSValidationNo）會由 api/ecpay-logistics-notify.js
+        // 這支 webhook 收到後補上，不算失敗。只有完全沒拿到 AllPayLogisticsID 才是真的失敗。
+        if (rtnCode !== '1' && !allPayLogisticsID) {
             console.error('ecpay-logistics-create 失敗:', rawText);
             res.status(400).json({ error: `綠界回覆失敗：${rtnMsg || rawText}` });
             return;
@@ -127,11 +133,12 @@ module.exports = async function handler(req, res) {
 
         const logisticsInfo = {
             tradeNo,
-            allPayLogisticsID: resultParams.get('AllPayLogisticsID') || '',
+            allPayLogisticsID,
             cvsPaymentNo: resultParams.get('CVSPaymentNo') || '',
             cvsValidationNo: resultParams.get('CVSValidationNo') || '',
+            rtnMsg,
             createdAt: new Date().toISOString(),
-            status: 'created'
+            status: rtnCode === '1' ? 'created' : 'pending'
         };
 
         const db = admin.firestore();
@@ -142,7 +149,7 @@ module.exports = async function handler(req, res) {
         });
         await batch.commit();
 
-        res.status(200).json({ ok: true, logistics: logisticsInfo });
+        res.status(200).json({ ok: true, logistics: logisticsInfo, pending: logisticsInfo.status === 'pending' });
     } catch (err) {
         console.error('ecpay-logistics-create error:', err);
         res.status(500).json({ error: '建立託運單失敗：' + String(err.message || err) });
