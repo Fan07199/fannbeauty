@@ -83,17 +83,21 @@ module.exports = async function handler(req, res) {
 
         const resultParams = new URLSearchParams(rawText);
         const allPayLogisticsID = resultParams.get('AllPayLogisticsID') || '';
+        const cvsPaymentNo = resultParams.get('CVSPaymentNo') || '';
         const rtnMsg = resultParams.get('RtnMsg') || resultParams.get('LogisticsStatus') || '';
 
-        if (!allPayLogisticsID) {
-            res.status(200).json({ ok: false, stillProcessing: true, message: rtnMsg || '綠界那邊還沒有最終結果，晚點再查一次' });
+        // ✅ 光有 AllPayLogisticsID 還不能列印，7-11 那邊要等 CVSPaymentNo（真正的寄貨編號）
+        // 也生成好才能印出條碼，不然點列印會看到綠界自己跳出「CVSPaymentNo is null」的視窗。
+        // 這兩個號碼常常不是同時出來的，CVSPaymentNo 需要再等一下，所以兩個都拿到才算「可以列印」。
+        if (!allPayLogisticsID || !cvsPaymentNo) {
+            res.status(200).json({ ok: false, stillProcessing: true, message: rtnMsg || '綠界/7-11 那邊寄貨編號還沒生成好，晚點再查一次' });
             return;
         }
 
         const logisticsInfo = {
             tradeNo,
             allPayLogisticsID,
-            cvsPaymentNo: resultParams.get('CVSPaymentNo') || '',
+            cvsPaymentNo,
             cvsValidationNo: resultParams.get('CVSValidationNo') || '',
             rtnMsg,
             createdAt: new Date().toISOString(),
