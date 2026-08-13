@@ -121,13 +121,18 @@ module.exports = async function handler(req, res) {
 
         const allPayLogisticsID = resultParams.get('AllPayLogisticsID') || '';
 
-        // ✅ 綠界物流有時候不會馬上回最終結果，RtnCode 不是 1、但已經有給 AllPayLogisticsID，
-        // 訊息像是「訂單處理中(綠界已收到訂單資料)」——這種情況先存成「處理中」，
-        // 真正的最終結果（含 CVSPaymentNo/CVSValidationNo）會由 api/ecpay-logistics-notify.js
-        // 這支 webhook 收到後補上，不算失敗。只有完全沒拿到 AllPayLogisticsID 才是真的失敗。
-        if (rtnCode !== '1' && !allPayLogisticsID) {
-            console.error('ecpay-logistics-create 失敗:', rawText);
-            res.status(400).json({ error: `綠界回覆失敗：${rtnMsg || rawText}` });
+        // ⚠️ 實際測試證實：RtnMsg 是「訂單處理中(綠界已收到訂單資料)」的時候，
+        // 即使 RtnCode 不是 1、也沒有立刻拿到 AllPayLogisticsID，綠界那邊其實還是
+        // 真的把託運單建立成功了（會出現在綠界物流後台，也能正常列印）。
+        // 之前把這種情況當成失敗，導致賣家看到「失敗」以為沒成功而重複按建立，
+        // 結果同一張訂單被重複建立好幾次、重複扣好幾次運費——這裡務必只判斷一次、
+        // 不能讓賣家因為「顯示失敗」而重複觸發。
+        const isProcessing = /處理中/.test(rtnMsg);
+        if (rtnCode !== '1' && !allPayLogisticsID && !isProcessing) {
+            console.error('ecpay-logistics-create 失敗:', { tradeNo, rtnCode, rawText });
+            // ✅ 把 MerchantTradeNo/RtnCode 一起回傳給前端顯示，方便之後要跟綠界客服對
+            // 服務端 log（他們的客服信提到可以幫忙查 log，這兩個值就是查詢用的關鍵資訊）
+            res.status(400).json({ error: `綠界回覆失敗：${rtnMsg || rawText}`, tradeNo, rtnCode });
             return;
         }
 
