@@ -34,7 +34,12 @@ const escapeHtml = (str) => String(str || '')
 
 module.exports = async function handler(req, res) {
     const logisticsId = typeof req.query.logisticsId === 'string' ? req.query.logisticsId : '';
-    if (!logisticsId || !/^[A-Za-z0-9]{1,20}$/.test(logisticsId)) {
+    // ⚠️ 批次列印：綠界的 7-11 C2C 列印頁面文件記載可以把多筆
+    // AllPayLogisticsID / CVSPaymentNo / CVSValidationNo 用逗號串在一起，一次送出，
+    // 綠界會回傳一張包含好幾筆託運單的合併頁面，一次列印完，不用一張一張分開開視窗。
+    // ⚠️ 這段批次格式沒有拿真實多筆訂單測試過，第一次用麻煩幫我確認：
+    // 選多筆一起送出後，跳出來的頁面是不是真的把每一筆託運單都印出來了（不是只有第一筆）。
+    if (!logisticsId || !/^[A-Za-z0-9]{1,20}(,[A-Za-z0-9]{1,20})*$/.test(logisticsId)) {
         res.status(400).send('缺少或格式錯誤的託運單編號');
         return;
     }
@@ -44,6 +49,11 @@ module.exports = async function handler(req, res) {
     const cvsValidationNo = typeof req.query.cvsValidationNo === 'string' ? req.query.cvsValidationNo : '';
     if (!cvsPaymentNo || !cvsValidationNo) {
         res.status(400).send('缺少寄貨編號，請先在後台重新查詢最新狀態');
+        return;
+    }
+    const idCount = logisticsId.split(',').length;
+    if (cvsPaymentNo.split(',').length !== idCount || cvsValidationNo.split(',').length !== idCount) {
+        res.status(400).send('批次列印的筆數對不起來，請重新操作');
         return;
     }
 
