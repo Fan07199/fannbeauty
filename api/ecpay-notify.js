@@ -72,21 +72,40 @@ module.exports = async function handler(req, res) {
 
         if (!snap.empty) {
             const rtnCode = String(body.RtnCode || '');
+            const logisticsStatus = String(body.LogisticsStatus || '');
+            const rtnMsg = String(body.RtnMsg || '');
             const logisticsInfo = {
                 tradeNo,
                 allPayLogisticsID: body.AllPayLogisticsID || '',
                 cvsPaymentNo: body.CVSPaymentNo || '',
                 cvsValidationNo: body.CVSValidationNo || '',
-                logisticsStatus: body.LogisticsStatus || '',
-                rtnMsg: body.RtnMsg || '',
+                logisticsStatus,
+                rtnMsg,
                 status: rtnCode === '1' || body.AllPayLogisticsID ? 'created' : 'failed',
                 updatedAt: new Date().toISOString()
             };
+
+            // ⚠️ 客人取貨的狀態判斷：綠界物流狀態的通知，會在包裹「建立」之後，
+            // 隨著包裹狀態改變（到店/取件完成/逾期退貨...）陸續再打好幾次同一支 ServerReplyURL，
+            // 目前是用 LogisticsStatus 代碼 + RtnMsg 關鍵字雙重比對「客人已經取件付款」這件事。
+            // ⚠️ 這組代碼/關鍵字是根據綠界官方文件先寫上去的，還沒有拿真實訂單驗證過，
+            // 麻煩第一筆貨到付款訂單走完「客人取貨」之後，把 Vercel 這支 function 的 log
+            // （會印出完整的 body 內容）貼給我對一次，確認代碼有沒有抓對、要不要調整。
+            const isPickedUp = logisticsStatus === '2030' || logisticsStatus === '3018'
+                || /取件人?已?取件|取件完成|已取貨|取貨完成/.test(rtnMsg);
+
             const batch = db.batch();
             snap.forEach(doc => {
                 batch.set(doc.ref, { cvsLogistics: logisticsInfo }, { merge: true });
+                if (isPickedUp) {
+                    batch.set(doc.ref, { status: 'completed' }, { merge: true });
+                }
             });
             await batch.commit();
+
+            if (isPickedUp) {
+                console.log('ecpay-logistics-notify: 偵測到客人已取件付款，訂單已自動標記為已結單', { tradeNo, logisticsStatus, rtnMsg });
+            }
         } else {
             console.error('ecpay-logistics-notify: 找不到對應訂單', tradeNo);
         }
