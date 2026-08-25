@@ -92,8 +92,11 @@ const getEligible = (promo, codeGroups) => {
     });
     return { subtotal, qty };
 };
-const calcDiscount = (promo, codeGroups, eligibleTotalOverride = null) => {
-    if (!isPromoActive(promo)) return 0;
+// ✅ locked=true 代表這個促銷是從訂單自己存的 promoSnapshot 來的（下單當下鎖住的那份），
+// 這種情況不用再檢查 enabled/時間區間——鎖住的快照本來就代表「下單當下這個活動確實在跑」，
+// 不然遇到活動剛好在客人下單後、按去刷卡前結束/被關掉，這裡會誤判成沒有優惠，多收客人錢
+const calcDiscount = (promo, locked, codeGroups, eligibleTotalOverride = null) => {
+    if (!locked && !isPromoActive(promo)) return 0;
     const { subtotal: rawTotal, qty: eQty } = getEligible(promo, codeGroups);
     const eTotal = eligibleTotalOverride != null ? eligibleTotalOverride : rawTotal;
     if (eTotal === 0) return 0;
@@ -121,23 +124,32 @@ const promoEligibleCodes = (promo, codeGroups) => {
     const useWL = promo.itemFilter === 'whitelist' && Array.isArray(promo.whitelist) && promo.whitelist.length > 0;
     return Object.keys(codeGroups).filter(code => !useWL || promo.whitelist.includes(code));
 };
-const calcTotalDiscount = (codeGroups, promo1, promo2) => {
-    const d1 = promo1 ? calcDiscount(promo1, codeGroups) : 0;
-    if (!promo2) return d1;
-    const { subtotal: elig2 } = getEligible(promo2, codeGroups);
+// ✅ p1/p2 是 {promo, locked} 這種形狀（來自 resolvePromo），不是原始的促銷設定物件
+const calcTotalDiscount = (codeGroups, p1, p2) => {
+    const d1 = p1.promo ? calcDiscount(p1.promo, p1.locked, codeGroups) : 0;
+    if (!p2.promo) return d1;
+    const { subtotal: elig2 } = getEligible(p2.promo, codeGroups);
     if (elig2 === 0) return d1;
-    const codes1 = promo1 ? new Set(promoEligibleCodes(promo1, codeGroups)) : new Set();
-    const hasOverlap = promoEligibleCodes(promo2, codeGroups).some(c => codes1.has(c));
+    const codes1 = p1.promo ? new Set(promoEligibleCodes(p1.promo, codeGroups)) : new Set();
+    const hasOverlap = promoEligibleCodes(p2.promo, codeGroups).some(c => codes1.has(c));
     const remaining2 = hasOverlap ? Math.max(0, elig2 - d1) : elig2;
-    const d2 = calcDiscount(promo2, codeGroups, remaining2);
+    const d2 = calcDiscount(p2.promo, p2.locked, codeGroups, remaining2);
     return d1 + d2;
 };
-const calcGrandDiscount = (codeGroups, itemTotal, promo1, promo2, earlyBird) => {
-    const promoDiscount = calcTotalDiscount(codeGroups, promo1, promo2);
-    if (!earlyBird || !isPromoActive(earlyBird)) return promoDiscount;
+const calcGrandDiscount = (codeGroups, itemTotal, p1, p2, eb) => {
+    const promoDiscount = calcTotalDiscount(codeGroups, p1, p2);
+    if (!eb.promo || (!eb.locked && !isPromoActive(eb.promo))) return promoDiscount;
     const remaining = Math.max(0, itemTotal - promoDiscount);
-    const ebDiscount = Math.round(remaining * (100 - (Number(earlyBird.percent) || 100)) / 100);
+    const ebDiscount = Math.round(remaining * (100 - (Number(eb.promo.percent) || 100)) / 100);
     return promoDiscount + ebDiscount;
+};
+// ✅ 促銷解析規則跟 admin.html / index.html 完全對齊：訂單自己的 promoSnapshot 存在就優先用、
+// 而且視為鎖定（不再檢查 enabled/時間區間）；沒有快照的舊訂單才 fallback 檢查目前的即時活動設定，
+// 並且是拿「下單當下的時間」去比對活動區間，不是拿「現在刷卡的時間」比對
+const resolvePromo = (snapshot, live, atDate) => {
+    if (snapshot && snapshot.enabled) return { promo: snapshot, locked: true };
+    if (live && live.enabled && (!live.startAt || new Date(live.startAt) <= atDate) && (!live.endAt || new Date(live.endAt) >= atDate)) return { promo: live, locked: false };
+    return { promo: null, locked: false };
 };
 
 module.exports = async function handler(req, res) {
@@ -173,6 +185,7 @@ module.exports = async function handler(req, res) {
         const itemNames = [];
         let customerName = '';
         let creditApplied = 0;
+        let promoSnapshot = null, promoSnapshot2 = null, earlyBirdSnapshot = null, orderCreatedAt = null;
         snap.forEach(doc => {
             const o = doc.data();
             const qty = Number(o.quantity) || 1;
@@ -184,6 +197,10 @@ module.exports = async function handler(req, res) {
             itemNames.push(`${o.productName || o.itemCode}${o.spec ? `(${o.spec})` : ''}x${qty}`);
             customerName = o.customerName || customerName;
             creditApplied += Number(o.creditApplied) || 0;
+            if (!promoSnapshot && o.promoSnapshot) promoSnapshot = o.promoSnapshot;
+            if (!promoSnapshot2 && o.promoSnapshot2) promoSnapshot2 = o.promoSnapshot2;
+            if (!earlyBirdSnapshot && o.earlyBirdSnapshot) earlyBirdSnapshot = o.earlyBirdSnapshot;
+            if (!orderCreatedAt && o.createdAt) orderCreatedAt = o.createdAt;
         });
         const itemTotal = Object.values(codeGroups).reduce((s, cg) => s + cg.subtotal, 0);
         if (itemTotal <= 0) {
@@ -196,7 +213,13 @@ module.exports = async function handler(req, res) {
         const promotion2 = promo2Snap.exists ? promo2Snap.data() : null;
         const earlyBird = earlyBirdSnap.exists ? earlyBirdSnap.data() : null;
 
-        const promoDiscount = calcGrandDiscount(codeGroups, itemTotal, promotion, promotion2, earlyBird);
+        const orderDate = orderCreatedAt && typeof orderCreatedAt.toDate === 'function'
+            ? orderCreatedAt.toDate()
+            : (orderCreatedAt ? new Date(orderCreatedAt) : new Date());
+        const p1 = resolvePromo(promoSnapshot, promotion, orderDate);
+        const p2 = resolvePromo(promoSnapshot2, promotion2, orderDate);
+        const eb = resolvePromo(earlyBirdSnapshot, earlyBird, orderDate);
+        const promoDiscount = calcGrandDiscount(codeGroups, itemTotal, p1, p2, eb);
         const threshold = storeConfig.freeShippingThreshold || 1500;
         const shippingFeeAmt = storeConfig.shippingFee ?? 38;
         const payableForShipping = Math.max(0, itemTotal - promoDiscount - creditApplied);
@@ -208,6 +231,16 @@ module.exports = async function handler(req, res) {
             res.status(400).send('訂單金額為 0，不需要刷卡');
             return;
         }
+
+        // ✅ 除錯用：把折扣是怎麼算出來的印出來，之後如果客人刷卡金額跟後台顯示的金額對不起來，
+        // 直接查這支的 log 就能看到當下用了哪個促銷（有沒有正確吃到訂單自己的 promoSnapshot）、
+        // 折了多少錢，不用再用猜的
+        console.log('ecpay-checkout 金額試算:', {
+            tradeNo, itemTotal, promoDiscount, creditApplied, hasShippingFee, shippingFeeAmt, totalAmount,
+            promo1: p1.promo ? { name: p1.promo.name, locked: p1.locked } : null,
+            promo2: p2.promo ? { name: p2.promo.name, locked: p2.locked } : null,
+            earlyBird: eb.promo ? { name: eb.promo.name, locked: eb.locked } : null
+        });
 
         // ✅ 除錯用：不含任何密鑰，只印出「用了哪個商店代號、打去正式站還是測試站」，
         // 方便在 Vercel 的 Logs 分頁對照，確認環境變數有沒有生效
