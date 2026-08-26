@@ -95,7 +95,12 @@ const getEligible = (promo, codeGroups) => {
 // ✅ locked=true 代表這個促銷是從訂單自己存的 promoSnapshot 來的（下單當下鎖住的那份），
 // 這種情況不用再檢查 enabled/時間區間——鎖住的快照本來就代表「下單當下這個活動確實在跑」，
 // 不然遇到活動剛好在客人下單後、按去刷卡前結束/被關掉，這裡會誤判成沒有優惠，多收客人錢
-const calcDiscount = (promo, locked, codeGroups, eligibleTotalOverride = null) => {
+const promoTiers = (promo) => Array.isArray(promo.tiers) && promo.tiers.length > 0
+    ? promo.tiers
+    : (promo.threshold ? [{ threshold: promo.threshold, discount: promo.thresholdDiscount }] : []);
+// ✅ eligibleQtyOverride 是給「兩組優惠疊加」用的：如果同一批商品的件數已經被第一組
+// 的門檻用掉幾件，這裡就能傳「扣掉之後還剩多少件」，避免同樣的件數被兩組門檻各算一次
+const calcDiscount = (promo, locked, codeGroups, eligibleTotalOverride = null, eligibleQtyOverride = null) => {
     if (!locked && !isPromoActive(promo)) return 0;
     const { subtotal: rawTotal, qty: eQty } = getEligible(promo, codeGroups);
     const eTotal = eligibleTotalOverride != null ? eligibleTotalOverride : rawTotal;
@@ -108,10 +113,8 @@ const calcDiscount = (promo, locked, codeGroups, eligibleTotalOverride = null) =
             return Math.round(eTotal * (100 - pct) / 100);
         }
         case 'threshold': {
-            const tiers = Array.isArray(promo.tiers) && promo.tiers.length > 0
-                ? promo.tiers
-                : (promo.threshold ? [{ threshold: promo.threshold, discount: promo.thresholdDiscount }] : []);
-            const basisValue = promo.tierBasis === 'qty' ? eQty : eTotal;
+            const tiers = promoTiers(promo);
+            const basisValue = promo.tierBasis === 'qty' ? (eligibleQtyOverride ?? eQty) : eTotal;
             const applicable = tiers
                 .filter(t => basisValue >= (Number(t.threshold) || 0))
                 .sort((a, b) => (Number(b.threshold) || 0) - (Number(a.threshold) || 0))[0];
@@ -128,12 +131,24 @@ const promoEligibleCodes = (promo, codeGroups) => {
 const calcTotalDiscount = (codeGroups, p1, p2) => {
     const d1 = p1.promo ? calcDiscount(p1.promo, p1.locked, codeGroups) : 0;
     if (!p2.promo) return d1;
-    const { subtotal: elig2 } = getEligible(p2.promo, codeGroups);
+    const { subtotal: elig2, qty: elig2Qty } = getEligible(p2.promo, codeGroups);
     if (elig2 === 0) return d1;
     const codes1 = p1.promo ? new Set(promoEligibleCodes(p1.promo, codeGroups)) : new Set();
     const hasOverlap = promoEligibleCodes(p2.promo, codeGroups).some(c => codes1.has(c));
-    const remaining2 = hasOverlap ? Math.max(0, elig2 - d1) : elig2;
-    const d2 = calcDiscount(p2.promo, p2.locked, codeGroups, remaining2);
+    let remaining2 = elig2, remaining2Qty = elig2Qty;
+    if (hasOverlap) {
+        remaining2 = Math.max(0, elig2 - d1);
+        // ✅ 兩組都是「照件數算階梯」的話，扣掉第一組門檻已經用掉的件數，
+        // 避免同一批商品的件數被兩組各自的「任選N件」門檻重複算到
+        if (p1.promo && p2.promo.type === 'threshold' && p2.promo.tierBasis === 'qty') {
+            const { qty: elig1Qty } = getEligible(p1.promo, codeGroups);
+            const usedQty = (promoTiers(p1.promo)
+                .filter(t => elig1Qty >= (Number(t.threshold) || 0))
+                .sort((a, b) => (Number(b.threshold) || 0) - (Number(a.threshold) || 0))[0] || {}).threshold;
+            remaining2Qty = Math.max(0, elig2Qty - (Number(usedQty) || 0));
+        }
+    }
+    const d2 = calcDiscount(p2.promo, p2.locked, codeGroups, remaining2, remaining2Qty);
     return d1 + d2;
 };
 const calcGrandDiscount = (codeGroups, itemTotal, p1, p2, eb) => {
