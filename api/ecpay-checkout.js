@@ -166,6 +166,34 @@ const resolvePromo = (snapshot, live, atDate) => {
     if (live && live.enabled && (!live.startAt || new Date(live.startAt) <= atDate) && (!live.endAt || new Date(live.endAt) >= atDate)) return { promo: live, locked: false };
     return { promo: null, locked: false };
 };
+// ✅ 「包色優惠」是掛在商品自己身上的設定（不是像上面那兩組促銷活動是共用設定），
+// 跟 admin.html / index.html 用同一套算法：這個商品的訂單品項裡出現幾種不同顏色，
+// 每湊滿一次設定的門檻就折一次，用的是商品當下的設定（沒有像促銷活動那樣做鎖定快照，
+// 因為「包色優惠」沒有開始/結束時間，不會有「客人下單後活動又變動」這種時間差問題）
+const colorSetDiscount = (codeGroups, productsByCode) => {
+    let total = 0;
+    const labels = [];
+    Object.entries(codeGroups).forEach(([code, cg]) => {
+        const p = productsByCode[code];
+        if (!p || !p.colorSetPromo || !p.colorSetPromo.enabled) return;
+        const required = Number(p.colorSetPromo.requiredColors) || 0;
+        const discount = Number(p.colorSetPromo.discount) || 0;
+        if (required <= 0 || discount <= 0) return;
+        const colorList = String(p.colors || '').split(/[\/,、]/).map(s => s.trim()).filter(Boolean);
+        const distinctColors = new Set();
+        (cg.items || []).forEach(it => {
+            const tokens = String(it.spec || '').split(' ').filter(Boolean);
+            const colorTok = tokens.find(t => colorList.includes(t));
+            if (colorTok) distinctColors.add(colorTok);
+        });
+        const sets = Math.floor(distinctColors.size / required);
+        if (sets > 0) {
+            total += sets * discount;
+            labels.push(`包色優惠 x${sets}`);
+        }
+    });
+    return { discount: total, label: labels.join('、') };
+};
 
 module.exports = async function handler(req, res) {
     const tradeNo = typeof req.query.tradeNo === 'string' ? req.query.tradeNo : '';
@@ -181,12 +209,13 @@ module.exports = async function handler(req, res) {
     try {
         const db = admin.firestore();
         const settingsCol = db.collection(`artifacts/${APP_ID}/public/data/settings`);
-        const [snap, storeConfigSnap, promoSnap, promo2Snap, earlyBirdSnap] = await Promise.all([
+        const [snap, storeConfigSnap, promoSnap, promo2Snap, earlyBirdSnap, productsSnap] = await Promise.all([
             db.collection(`artifacts/${APP_ID}/public/data/orders`).where('ecpayTradeNo', '==', tradeNo).get(),
             settingsCol.doc('storeConfig').get(),
             settingsCol.doc('promotion').get(),
             settingsCol.doc('promotion2').get(),
-            settingsCol.doc('earlyBird').get()
+            settingsCol.doc('earlyBird').get(),
+            db.collection(`artifacts/${APP_ID}/public/data/shopProducts`).get()
         ]);
 
         if (snap.empty) {
@@ -206,9 +235,10 @@ module.exports = async function handler(req, res) {
             const qty = Number(o.quantity) || 1;
             const price = Number(o.price) || 0;
             const code = o.itemCode || o.productName || doc.id;
-            if (!codeGroups[code]) codeGroups[code] = { subtotal: 0, totalQty: 0 };
+            if (!codeGroups[code]) codeGroups[code] = { subtotal: 0, totalQty: 0, items: [] };
             codeGroups[code].subtotal += price * qty;
             codeGroups[code].totalQty += qty;
+            codeGroups[code].items.push({ spec: o.spec || '' });
             itemNames.push(`${o.productName || o.itemCode}${o.spec ? `(${o.spec})` : ''}x${qty}`);
             customerName = o.customerName || customerName;
             creditApplied += Number(o.creditApplied) || 0;
@@ -234,7 +264,14 @@ module.exports = async function handler(req, res) {
         const p1 = resolvePromo(promoSnapshot, promotion, orderDate);
         const p2 = resolvePromo(promoSnapshot2, promotion2, orderDate);
         const eb = resolvePromo(earlyBirdSnapshot, earlyBird, orderDate);
-        const promoDiscount = calcGrandDiscount(codeGroups, itemTotal, p1, p2, eb);
+        const productsByCode = {};
+        productsSnap.forEach(doc => {
+            const p = doc.data();
+            const code = (p.code || '').trim().toUpperCase();
+            if (code) productsByCode[code] = p;
+        });
+        const promoDiscount = calcGrandDiscount(codeGroups, itemTotal, p1, p2, eb)
+            + colorSetDiscount(codeGroups, productsByCode).discount;
         const threshold = storeConfig.freeShippingThreshold || 1500;
         const shippingFeeAmt = storeConfig.shippingFee ?? 38;
         const payableForShipping = Math.max(0, itemTotal - promoDiscount - creditApplied);
