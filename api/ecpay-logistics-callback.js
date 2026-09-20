@@ -17,6 +17,12 @@ module.exports = async function handler(req, res) {
     const address = typeof body.CVSAddress === 'string' ? body.CVSAddress : '';
     const phone = typeof body.CVSTelephone === 'string' ? body.CVSTelephone : '';
 
+    // ✅ 這三樣是官網那邊在導去選店之前，掛在 ServerReplyURL 網址上帶過來的（付款方式、
+    // 客人手機、收件人姓名），跟綠界選店結果本身無關，這裡只是原封不動地接住、繼續往下傳
+    const pm = typeof req.query.pm === 'string' ? req.query.pm : '';
+    const custPhone = typeof req.query.custPhone === 'string' ? req.query.custPhone : '';
+    const custReceiver = typeof req.query.custReceiver === 'string' ? req.query.custReceiver : '';
+
     if (!storeId) {
         // ✅ 客人在綠界頁面按上一頁/取消，沒有真的選店，就導回結帳頁，不帶門市參數
         res.writeHead(302, { Location: `${SITE_URL}/` });
@@ -28,7 +34,10 @@ module.exports = async function handler(req, res) {
         cvsStoreId: storeId,
         cvsStoreName: storeName,
         cvsAddress: address,
-        cvsPhone: phone
+        cvsPhone: phone,
+        ...(pm ? { pm } : {}),
+        ...(custPhone ? { custPhone } : {}),
+        ...(custReceiver ? { custReceiver } : {})
     });
 
     res.writeHead(302, { Location: `${SITE_URL}/?${params.toString()}` });
