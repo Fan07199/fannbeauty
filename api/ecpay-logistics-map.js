@@ -45,13 +45,24 @@ module.exports = async function handler(req, res) {
     // 選店結果本身不會拿這組編號去查訂單，客人選完店之後是直接把門市資訊帶回官網、下單當下才會真正寫進訂單
     const tempTradeNo = `MAP${Date.now().toString(36).toUpperCase()}`;
 
+    // ✅ 客人選的付款方式、填的手機/收件人姓名，原本只存在瀏覽器的 localStorage，指望繞去綠界選店
+    // 再繞回來之後還在——但 Safari 私密瀏覽等情況下，跨網域繞一圈回來 localStorage 可能會被清掉，
+    // 客人選完門市回來就變成要重填一次、付款方式也被打回「匯款」。這裡把這三樣東西一起帶在
+    // ServerReplyURL 上（綠界選店完成後會原樣把這個網址導回來，query string 不會被綠界動到），
+    // 讓門市資訊跟這三樣東西用同一條路徑回到官網，不再只靠 localStorage 能不能撐過這趟。
+    const replyExtra = new URLSearchParams({
+        pm: typeof req.query.pm === 'string' ? req.query.pm.slice(0, 50) : '',
+        custPhone: typeof req.query.custPhone === 'string' ? req.query.custPhone.slice(0, 50) : '',
+        custReceiver: typeof req.query.custReceiver === 'string' ? req.query.custReceiver.slice(0, 100) : ''
+    });
+
     const params = {
         MerchantID: MERCHANT_ID,
         MerchantTradeNo: tempTradeNo,
         LogisticsType: 'CVS',
         LogisticsSubType: 'UNIMARTC2C',
         IsCollection: 'Y', // ✅ 取貨付款（貨到付款），不是取貨不付款
-        ServerReplyURL: `${SITE_URL}/api/ecpay-logistics-callback`
+        ServerReplyURL: `${SITE_URL}/api/ecpay-logistics-callback?${replyExtra.toString()}`
     };
     params.CheckMacValue = genCheckMacValue(params);
 
