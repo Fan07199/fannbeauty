@@ -118,7 +118,12 @@ const calcDiscount = (promo, locked, codeGroups, eligibleTotalOverride = null, e
             const applicable = tiers
                 .filter(t => basisValue >= (Number(t.threshold) || 0))
                 .sort((a, b) => (Number(b.threshold) || 0) - (Number(a.threshold) || 0))[0];
-            return applicable ? (Number(applicable.discount) || 0) : 0;
+            if (!applicable) return 0;
+            // ✅ tierMode:'percent' 代表這一階填的是折數（例如 92 代表打92折，用 eTotal 算出實際折扣金額）；
+            // 沒填 tierMode（舊資料）或 'amount' 維持原本行為，填的就是直接折抵的金額
+            return promo.tierMode === 'percent'
+                ? Math.round(eTotal * (100 - (Number(applicable.discount) || 0)) / 100)
+                : (Number(applicable.discount) || 0);
         }
         default: return 0;
     }
