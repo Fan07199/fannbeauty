@@ -172,8 +172,8 @@ const resolvePromo = (snapshot, live, atDate) => {
     return { promo: null, locked: false };
 };
 // ✅ 「包色優惠」是掛在商品自己身上的設定（不是像上面那兩組促銷活動是共用設定），
-// 跟 admin.html / index.html 用同一套算法：這個商品的訂單品項裡出現幾種不同顏色，
-// 每湊滿一次設定的門檻就折一次，用的是商品當下的設定（沒有像促銷活動那樣做鎖定快照，
+// 跟 admin.html / index.html 用同一套算法：這個商品的訂單品項湊滿設定的件數（不限顏色、可重複）
+// 就折一次，用的是商品當下的設定（沒有像促銷活動那樣做鎖定快照，
 // 因為「包色優惠」沒有開始/結束時間，不會有「客人下單後活動又變動」這種時間差問題）
 const colorSetDiscount = (codeGroups, productsByCode) => {
     let total = 0;
@@ -184,14 +184,7 @@ const colorSetDiscount = (codeGroups, productsByCode) => {
         const required = Number(p.colorSetPromo.requiredColors) || 0;
         const discount = Number(p.colorSetPromo.discount) || 0;
         if (required <= 0 || discount <= 0) return;
-        const colorList = String(p.colors || '').split(/[\/,、]/).map(s => s.trim()).filter(Boolean);
-        const distinctColors = new Set();
-        (cg.items || []).forEach(it => {
-            const tokens = String(it.spec || '').split(' ').filter(Boolean);
-            const colorTok = tokens.find(t => colorList.includes(t));
-            if (colorTok) distinctColors.add(colorTok);
-        });
-        const sets = Math.floor(distinctColors.size / required);
+        const sets = Math.floor((cg.totalQty || 0) / required);
         if (sets > 0) {
             total += sets * discount;
             labels.push(`包色優惠 x${sets}`);
