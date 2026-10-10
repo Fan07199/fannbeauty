@@ -54,7 +54,7 @@ module.exports = async function handler(req, res) {
         console.log('ecpay-logistics-notify received:', body);
 
         const receivedMac = body.CheckMacValue;
-        if (receivedMac && genCheckMacValue(body) !== receivedMac) {
+        if (!receivedMac || genCheckMacValue(body) !== receivedMac) {
             console.error('ecpay-logistics-notify: CheckMacValue 驗證失敗', body);
             res.status(200).send('0|CheckMacValue Error');
             return;
@@ -72,7 +72,8 @@ module.exports = async function handler(req, res) {
 
         if (!snap.empty) {
             const rtnCode = String(body.RtnCode || '');
-            const logisticsStatus = String(body.LogisticsStatus || '');
+            // 物流狀態通知把貨態代碼放在 RtnCode（例如 2067）；LogisticsStatus 是查詢 API 才有的欄位，兩個都看
+            const logisticsStatus = String(body.LogisticsStatus || body.RtnCode || '');
             const rtnMsg = String(body.RtnMsg || '');
             const logisticsInfo = {
                 tradeNo,
@@ -85,26 +86,24 @@ module.exports = async function handler(req, res) {
                 updatedAt: new Date().toISOString()
             };
 
-            // ⚠️ 客人取貨的狀態判斷：綠界物流狀態的通知，會在包裹「建立」之後，
-            // 隨著包裹狀態改變（到店/取件完成/逾期退貨...）陸續再打好幾次同一支 ServerReplyURL，
-            // 目前是用 LogisticsStatus 代碼 + RtnMsg 關鍵字雙重比對「客人已經取件付款」這件事。
-            // ⚠️ 這組代碼/關鍵字是根據綠界官方文件先寫上去的，還沒有拿真實訂單驗證過，
-            // 麻煩第一筆貨到付款訂單走完「客人取貨」之後，把 Vercel 這支 function 的 log
-            // （會印出完整的 body 內容）貼給我對一次，確認代碼有沒有抓對、要不要調整。
-            const isPickedUp = logisticsStatus === '2030' || logisticsStatus === '3018'
-                || /取件人?已?取件|取件完成|已取貨|取貨完成/.test(rtnMsg);
+            // 綠界「物流狀態通知」貨態代碼：7-ELEVEN 商品送達門市 C2C 2073／B2C 2063、消費者成功取件 2067；
+            // 全家 送達門市 3018、成功取件 3022。代碼表會更新，所以 RtnMsg 關鍵字也一起比對。
+            const isPickedUp = ['2067', '3022'].includes(logisticsStatus)
+                || /成功取件|已取件|取件完成|已取貨|取貨完成/.test(rtnMsg);
+            const isArrived = ['2073', '2063', '3018'].includes(logisticsStatus)
+                || /(送達|配達).{0,6}門市|已到店/.test(rtnMsg);
+            if (isPickedUp) logisticsInfo.pickedUpAt = logisticsInfo.updatedAt;
+            if (isArrived) logisticsInfo.arrivedAt = logisticsInfo.updatedAt;
 
+            // 訂單 status 維持賣家設定的「已寄出」，不要倒退成「已結單」；到店／取件時間記在 cvsLogistics 給後台顯示
             const batch = db.batch();
             snap.forEach(doc => {
                 batch.set(doc.ref, { cvsLogistics: logisticsInfo }, { merge: true });
-                if (isPickedUp) {
-                    batch.set(doc.ref, { status: 'completed' }, { merge: true });
-                }
             });
             await batch.commit();
 
-            if (isPickedUp) {
-                console.log('ecpay-logistics-notify: 偵測到客人已取件付款，訂單已自動標記為已結單', { tradeNo, logisticsStatus, rtnMsg });
+            if (isPickedUp || isArrived) {
+                console.log('ecpay-logistics-notify:', isPickedUp ? '客人已取件' : '包裹已到店', { tradeNo, logisticsStatus, rtnMsg });
             }
         } else {
             console.error('ecpay-logistics-notify: 找不到對應訂單', tradeNo);
