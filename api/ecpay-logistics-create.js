@@ -51,6 +51,17 @@ const genCheckMacValue = (params) => {
     return crypto.createHash('md5').update(encoded).digest('hex').toUpperCase();
 };
 
+// 綠界規定商品名稱不能有 ^ ' ` ! @ # % & * + \ " < > | _ [ ]（半形、全形都擋），
+// emoji 也常被拒，商品代碼裡有這些字（例如「掛脖+罩衫」、「🔥」）就會回 10500038 建單失敗，這裡先拿掉
+const cleanGoodsName = (name) => {
+    const cleaned = String(name || '')
+        .replace(/[\^'`!@#%&*+\\"<>|_\[\]＾＇｀！＠＃％＆＊＋＼＂＜＞｜＿［］‘’“”]/g, ' ')
+        .replace(/[\u{10000}-\u{10FFFF}☀-➿️‍]/gu, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    return (cleaned || 'Fann選購商品').slice(0, 50);
+};
+
 module.exports = async function handler(req, res) {
     // ✅ 賣家後台 admin.html 是放在另一個網域（fann-seller 專案），跟這支 API 所在的
     // fannbeauty 網域不同，瀏覽器會把這種呼叫當成跨網域請求（CORS），沒有這幾行標頭
@@ -95,7 +106,7 @@ module.exports = async function handler(req, res) {
             GoodsAmount: String(totalAmount),
             ...(collectOnDelivery ? { CollectionAmount: String(totalAmount) } : {}), // ✅ 只有 IsCollection=Y（貨到付款）才能帶這個欄位，金額要跟 GoodsAmount 一樣
             IsCollection: collectOnDelivery ? 'Y' : 'N',
-            GoodsName: String(goodsName || 'Fann選購商品').slice(0, 50),
+            GoodsName: cleanGoodsName(goodsName),
             SenderName: String(senderName || 'FannBeauty').slice(0, 10),
             SenderCellPhone: String(senderPhone || '').replace(/\D/g, '').slice(0, 20),
             ReceiverName: String(receiverName).slice(0, 10),
