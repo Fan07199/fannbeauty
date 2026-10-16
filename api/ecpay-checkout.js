@@ -272,7 +272,8 @@ module.exports = async function handler(req, res) {
             + colorSetDiscount(codeGroups, productsByCode).discount;
         const threshold = storeConfig.freeShippingThreshold || 1500;
         const shippingFeeAmt = storeConfig.shippingFee ?? 38;
-        const payableForShipping = Math.max(0, itemTotal - promoDiscount - creditApplied);
+        // 免運門檻看「扣掉促銷折扣後」的金額，購物金折抵不算進去（跟官網結帳畫面、後台的算法一致）
+        const payableForShipping = Math.max(0, itemTotal - promoDiscount);
         const hasShippingFee = payableForShipping < threshold && itemTotal > 0;
         const baseTotal = hasShippingFee ? itemTotal + shippingFeeAmt : itemTotal;
         const totalAmount = Math.max(0, baseTotal - promoDiscount - creditApplied);
