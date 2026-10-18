@@ -285,8 +285,11 @@ module.exports = async function handler(req, res) {
                 res.status(400).send('這個國際配送地區目前沒有開放，請聯繫賣家');
                 return;
             }
-            shippingFeeAmt = fee;
-            hasShippingFee = true;
+            // 國際優惠運費：扣掉促銷折扣後滿門檻（預設 $3,000）就只收優惠運費（預設 $150），跟官網結帳畫面同一套算法
+            const discThreshold = Number(storeConfig.intlDiscountThreshold ?? 3000) || 0;
+            const discFee = Number(storeConfig.intlDiscountFee ?? 150);
+            shippingFeeAmt = discThreshold > 0 && discFee >= 0 && payableForShipping >= discThreshold ? Math.min(fee, discFee) : fee;
+            hasShippingFee = shippingFeeAmt > 0;
         }
         const baseTotal = hasShippingFee ? itemTotal + shippingFeeAmt : itemTotal;
         const totalAmount = Math.max(0, baseTotal - promoDiscount - creditApplied);
