@@ -227,7 +227,7 @@ module.exports = async function handler(req, res) {
         const itemNames = [];
         let customerName = '';
         let creditApplied = 0;
-        let promoSnapshot = null, promoSnapshot2 = null, earlyBirdSnapshot = null, orderCreatedAt = null;
+        let promoSnapshot = null, promoSnapshot2 = null, earlyBirdSnapshot = null, orderCreatedAt = null, intlShipping = null;
         snap.forEach(doc => {
             const o = doc.data();
             const qty = Number(o.quantity) || 1;
@@ -244,6 +244,7 @@ module.exports = async function handler(req, res) {
             if (!promoSnapshot2 && o.promoSnapshot2) promoSnapshot2 = o.promoSnapshot2;
             if (!earlyBirdSnapshot && o.earlyBirdSnapshot) earlyBirdSnapshot = o.earlyBirdSnapshot;
             if (!orderCreatedAt && o.createdAt) orderCreatedAt = o.createdAt;
+            if (!intlShipping && o.shippingMethod === 'intl' && o.intlShipping) intlShipping = o.intlShipping;
         });
         const itemTotal = Object.values(codeGroups).reduce((s, cg) => s + cg.subtotal, 0);
         if (itemTotal <= 0) {
@@ -271,10 +272,22 @@ module.exports = async function handler(req, res) {
         const promoDiscount = calcGrandDiscount(codeGroups, itemTotal, p1, p2, eb)
             + colorSetDiscount(codeGroups, productsByCode).discount;
         const threshold = storeConfig.freeShippingThreshold || 1500;
-        const shippingFeeAmt = storeConfig.shippingFee ?? 38;
+        let shippingFeeAmt = storeConfig.shippingFee ?? 38;
         // 免運門檻看「扣掉促銷折扣後」的金額，購物金折抵不算進去（跟官網結帳畫面、後台的算法一致）
         const payableForShipping = Math.max(0, itemTotal - promoDiscount);
-        const hasShippingFee = payableForShipping < threshold && itemTotal > 0;
+        let hasShippingFee = payableForShipping < threshold && itemTotal > 0;
+        // 國際配送：運費一律照後台「國際配送運費」設定的地區運費收（不適用免運），不相信前端傳來的運費
+        if (intlShipping) {
+            const regions = Array.isArray(storeConfig.intlRegions) ? storeConfig.intlRegions : [];
+            const region = regions.find(r => r && r.name === intlShipping.region);
+            const fee = region ? Number(region.fee) || 0 : 0;
+            if (fee <= 0) {
+                res.status(400).send('這個國際配送地區目前沒有開放，請聯繫賣家');
+                return;
+            }
+            shippingFeeAmt = fee;
+            hasShippingFee = true;
+        }
         const baseTotal = hasShippingFee ? itemTotal + shippingFeeAmt : itemTotal;
         const totalAmount = Math.max(0, baseTotal - promoDiscount - creditApplied);
 
@@ -287,7 +300,7 @@ module.exports = async function handler(req, res) {
         // 直接查這支的 log 就能看到當下用了哪個促銷（有沒有正確吃到訂單自己的 promoSnapshot）、
         // 折了多少錢，不用再用猜的
         console.log('ecpay-checkout 金額試算:', {
-            tradeNo, itemTotal, promoDiscount, creditApplied, hasShippingFee, shippingFeeAmt, totalAmount,
+            tradeNo, itemTotal, promoDiscount, creditApplied, hasShippingFee, shippingFeeAmt, totalAmount, intlRegion: intlShipping ? intlShipping.region : null,
             promo1: p1.promo ? { name: p1.promo.name, locked: p1.locked } : null,
             promo2: p2.promo ? { name: p2.promo.name, locked: p2.locked } : null,
             earlyBird: eb.promo ? { name: eb.promo.name, locked: eb.locked } : null
