@@ -28,6 +28,10 @@ if (!admin.apps.length) {
 const FALLBACK_SITE_URL = 'https://www.fann-beauty.com';
 const APP_ID = 'fann-beauty-production-v1'; // ✅ 要跟 index.html / admin.html 裡的 appId 常數一致
 
+// 連結預覽機器人（不是真人）：Meta（FB／IG／Threads）、LINE、X、Google… 這些只讀 HTML 抓縮圖。
+// ⚠️ 不能用 "Instagram"、"Line/" 判斷，那是真人在 IG／LINE 裡開網頁的瀏覽器
+const BOT_UA = /facebookexternalhit|facebot|meta-externalagent|meta-externalfetcher|line-poker|twitterbot|slackbot|discordbot|whatsapp|telegrambot|googlebot|bingbot|pinterest|applebot|embedly|redditbot|iframely|skypeuripreview|linkedinbot/i;
+
 const escapeHtml = (str) => String(str || '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
@@ -38,6 +42,10 @@ module.exports = async function handler(req, res) {
     const DEFAULT_IMAGE = `${SITE_URL}/logo.png`;
     const id = typeof req.query.id === 'string' ? req.query.id : '';
     const productUrl = id ? `${SITE_URL}/?product=${encodeURIComponent(id)}` : SITE_URL;
+    // ✅ og:url 一定要指回「這個分享連結自己」：Meta（Threads／FB）會照 og:url 重新抓一次，
+    // 之前填的是選購頁網址，Meta 就跑去讀首頁的 logo，所以 Threads 一直顯示 logo 不是商品照
+    const shareUrl = id ? `${SITE_URL}/p/${encodeURIComponent(id)}` : SITE_URL;
+    const isBot = BOT_UA.test(String(req.headers['user-agent'] || ''));
 
     let title = 'Fann.Beauty｜官網';
     let description = 'Fann.Beauty 官方網站';
@@ -50,7 +58,8 @@ module.exports = async function handler(req, res) {
             if (snap.exists) {
                 const p = snap.data();
                 if (p.name) title = `${p.name}｜Fann.Beauty`;
-                if (p.image) image = p.image;
+                const firstImage = (Array.isArray(p.images) && p.images.find(u => typeof u === 'string' && /^https?:/.test(u))) || p.image;
+                if (firstImage && /^https?:/.test(firstImage)) image = firstImage;
                 const priceLine = p.price ? `NT$ ${p.price}` : '';
                 description = [priceLine, p.desc].filter(Boolean).join(' · ') || description;
             }
@@ -61,19 +70,22 @@ module.exports = async function handler(req, res) {
 
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.setHeader('Cache-Control', 'public, max-age=300'); // 快取 5 分鐘，減少重複查 Firestore 的次數
+    res.setHeader('Vary', 'User-Agent'); // 機器人跟真人拿到的內容不同（機器人不轉址），不能共用快取
     res.status(200).send(`<!DOCTYPE html>
 <html lang="zh-TW">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="refresh" content="0; url=${escapeHtml(productUrl)}">
-<title>${escapeHtml(title)}</title>
-<meta property="og:type" content="website">
+${isBot ? '' : `<meta http-equiv="refresh" content="0; url=${escapeHtml(productUrl)}">\n`}<title>${escapeHtml(title)}</title>
+<meta property="og:type" content="product">
+<meta property="og:site_name" content="Fann.Beauty">
 <meta property="og:title" content="${escapeHtml(title)}">
 <meta property="og:description" content="${escapeHtml(description)}">
 <meta property="og:image" content="${escapeHtml(image)}">
-<meta property="og:url" content="${escapeHtml(productUrl)}">
+<meta property="og:image:alt" content="${escapeHtml(title)}">
+<meta property="og:url" content="${escapeHtml(shareUrl)}">
+<link rel="canonical" href="${escapeHtml(shareUrl)}">
 <meta name="twitter:card" content="summary_large_image">
-<script>location.replace(${JSON.stringify(productUrl)});</script>
+${isBot ? '' : `<script>location.replace(${JSON.stringify(productUrl)});</script>`}
 </head>
 <body>
 <p>正在前往商品頁面...</p>
