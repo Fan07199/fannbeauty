@@ -171,23 +171,67 @@ const resolvePromo = (snapshot, live, atDate) => {
     if (live && live.enabled && (!live.startAt || new Date(live.startAt) <= atDate) && (!live.endAt || new Date(live.endAt) >= atDate)) return { promo: live, locked: false };
     return { promo: null, locked: false };
 };
+// ✅ 「款式＋組合價」：商品可以設定不同款式不同價格（例如短版／長版），再設定兩件一組的組合價
+// （例如短版＋長版 $2,580）。購物車裡同一個商品的各款式件數，用「折最多」的方式配對成組，
+// 跟官網 index.html／後台 admin 的 comboCalc 是同一套算法
+const styleOf = (p, spec) => {
+    if (!p || !Array.isArray(p.styles) || !p.styles.length) return null;
+    const sp = String(spec || '');
+    return p.styles.find(s => s && s.name && (sp === s.name || sp.startsWith(s.name + ' '))) || null;
+};
+const comboCalc = (p, cnt) => {
+    if (!p || !p.comboPromo || !p.comboPromo.enabled || !Array.isArray(p.styles)) return { d: 0, n: 0 };
+    const pr = {};
+    p.styles.forEach(s => { if (s && s.name) pr[s.name] = Number(s.price) || 0; });
+    const rules = (p.comboPromo.rules || [])
+        .filter(r => r && pr[r.a] != null && pr[r.b] != null)
+        .map(r => ({ a: r.a, b: r.b, d: pr[r.a] + pr[r.b] - (Number(r.price) || 0) }))
+        .filter(r => r.d > 0);
+    let best = { d: 0, n: 0 }, steps = 0;
+    const go = (i, c, d, n) => {
+        if (++steps > 20000) return;
+        if (i === rules.length) { if (d > best.d || (d === best.d && n > best.n)) best = { d, n }; return; }
+        const r = rules[i], cc = { ...c };
+        for (let k = 0; ; k++) {
+            go(i + 1, { ...cc }, d + k * r.d, n + k);
+            if (r.a === r.b) { if ((cc[r.a] || 0) < 2) break; cc[r.a] -= 2; }
+            else { if ((cc[r.a] || 0) < 1 || (cc[r.b] || 0) < 1) break; cc[r.a]--; cc[r.b]--; }
+        }
+    };
+    go(0, { ...cnt }, 0, 0);
+    return best;
+};
 // ✅ 「包色優惠」是掛在商品自己身上的設定（不是像上面那兩組促銷活動是共用設定），
 // 跟 admin.html / index.html 用同一套算法：這個商品的訂單品項湊滿設定的件數（不限顏色、可重複）
-// 就折一次，用的是商品當下的設定（沒有像促銷活動那樣做鎖定快照，
-// 因為「包色優惠」沒有開始/結束時間，不會有「客人下單後活動又變動」這種時間差問題）
+// 就折一次；同一個商品如果有設定「組合價」也一起算
 const colorSetDiscount = (codeGroups, productsByCode) => {
     let total = 0;
     const labels = [];
     Object.entries(codeGroups).forEach(([code, cg]) => {
         const p = productsByCode[code];
-        if (!p || !p.colorSetPromo || !p.colorSetPromo.enabled) return;
-        const required = Number(p.colorSetPromo.requiredColors) || 0;
-        const discount = Number(p.colorSetPromo.discount) || 0;
-        if (required <= 0 || discount <= 0) return;
-        const sets = Math.floor((cg.totalQty || 0) / required);
-        if (sets > 0) {
-            total += sets * discount;
-            labels.push(`包色優惠 x${sets}`);
+        if (!p) return;
+        if (p.colorSetPromo && p.colorSetPromo.enabled) {
+            const required = Number(p.colorSetPromo.requiredColors) || 0;
+            const discount = Number(p.colorSetPromo.discount) || 0;
+            if (required > 0 && discount > 0) {
+                const sets = Math.floor((cg.totalQty || 0) / required);
+                if (sets > 0) {
+                    total += sets * discount;
+                    labels.push(`包色優惠 x${sets}`);
+                }
+            }
+        }
+        if (p.comboPromo && p.comboPromo.enabled) {
+            const cnt = {};
+            (cg.items || []).forEach(it => {
+                const st = styleOf(p, it.spec);
+                if (st) cnt[st.name] = (cnt[st.name] || 0) + (Number(it.qty) || 0);
+            });
+            const r = comboCalc(p, cnt);
+            if (r.d > 0) {
+                total += r.d;
+                labels.push(`${p.comboPromo.label || '組合價'} x${r.n}`);
+            }
         }
     });
     return { discount: total, label: labels.join('、') };
@@ -236,7 +280,7 @@ module.exports = async function handler(req, res) {
             if (!codeGroups[code]) codeGroups[code] = { subtotal: 0, totalQty: 0, items: [] };
             codeGroups[code].subtotal += price * qty;
             codeGroups[code].totalQty += qty;
-            codeGroups[code].items.push({ spec: o.spec || '' });
+            codeGroups[code].items.push({ spec: o.spec || '', qty });
             itemNames.push(`${o.productName || o.itemCode}${o.spec ? `(${o.spec})` : ''}x${qty}`);
             customerName = o.customerName || customerName;
             creditApplied += Number(o.creditApplied) || 0;
