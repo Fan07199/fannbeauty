@@ -154,7 +154,11 @@ module.exports = async function handler(req, res) {
             cvsValidationNo: resultParams.get('CVSValidationNo') || '',
             rtnMsg,
             createdAt: new Date().toISOString(),
-            status: rtnCode === '1' ? 'created' : 'pending'
+            status: rtnCode === '1' ? 'created' : 'pending',
+            // 拆單寄出時，每一包有自己的託運單；記下這包的金額跟是否代收，後台才算得出每包取貨要收多少
+            amount: totalAmount,
+            isCollection: collectOnDelivery,
+            itemCount: orderIds.length
         };
 
         const db = admin.firestore();
