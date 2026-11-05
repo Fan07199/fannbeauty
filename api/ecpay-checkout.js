@@ -119,6 +119,12 @@ const calcDiscount = (promo, locked, codeGroups, eligibleTotalOverride = null, e
                 .filter(t => basisValue >= (Number(t.threshold) || 0))
                 .sort((a, b) => (Number(b.threshold) || 0) - (Number(a.threshold) || 0))[0];
             if (!applicable) return 0;
+            // ✅ tierRepeat：每滿就折、無上限（用最低那一階計算，例如每滿 $1111 折 $111），只適用折扣金額模式
+            if (promo.tierRepeat && promo.tierMode !== 'percent') {
+                const first = tiers.slice().sort((a, b) => (Number(a.threshold) || 0) - (Number(b.threshold) || 0))[0];
+                const th = Number(first.threshold) || 0;
+                return th > 0 ? Math.min(eTotal, Math.floor(basisValue / th) * (Number(first.discount) || 0)) : 0;
+            }
             // ✅ tierMode:'percent' 代表這一階填的是折數（例如 92 代表打92折，用 eTotal 算出實際折扣金額）；
             // 沒填 tierMode（舊資料）或 'amount' 維持原本行為，填的就是直接折抵的金額
             return promo.tierMode === 'percent'
@@ -147,9 +153,14 @@ const calcTotalDiscount = (codeGroups, p1, p2) => {
         // 避免同一批商品的件數被兩組各自的「任選N件」門檻重複算到
         if (p1.promo && p2.promo.type === 'threshold' && p2.promo.tierBasis === 'qty') {
             const { qty: elig1Qty } = getEligible(p1.promo, codeGroups);
-            const usedQty = (promoTiers(p1.promo)
+            const top1 = promoTiers(p1.promo)
                 .filter(t => elig1Qty >= (Number(t.threshold) || 0))
-                .sort((a, b) => (Number(b.threshold) || 0) - (Number(a.threshold) || 0))[0] || {}).threshold;
+                .sort((a, b) => (Number(b.threshold) || 0) - (Number(a.threshold) || 0))[0];
+            const first1 = promoTiers(p1.promo).slice().sort((a, b) => (Number(a.threshold) || 0) - (Number(b.threshold) || 0))[0];
+            const usedQty = !top1 ? 0
+                : (p1.promo.tierRepeat && p1.promo.tierMode !== 'percent' && first1 && Number(first1.threshold) > 0)
+                    ? Math.floor(elig1Qty / Number(first1.threshold)) * Number(first1.threshold)
+                    : top1.threshold;
             remaining2Qty = Math.max(0, elig2Qty - (Number(usedQty) || 0));
         }
     }
