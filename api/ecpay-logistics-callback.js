@@ -22,10 +22,11 @@ module.exports = async function handler(req, res) {
     const pm = typeof req.query.pm === 'string' ? req.query.pm : '';
     const custPhone = typeof req.query.custPhone === 'string' ? req.query.custPhone : '';
     const custReceiver = typeof req.query.custReceiver === 'string' ? req.query.custReceiver : '';
+    const h = typeof req.query.h === 'string' && /^[A-Za-z0-9_-]{12,64}$/.test(req.query.h) ? req.query.h : '';
 
     if (!storeId) {
         // ✅ 客人在綠界頁面按上一頁/取消，沒有真的選店，就導回結帳頁，不帶門市參數
-        res.writeHead(302, { Location: `${SITE_URL}/` });
+        res.writeHead(302, { Location: `${SITE_URL}/${h ? `?h=${h}` : ''}` });
         res.end();
         return;
     }
@@ -37,7 +38,8 @@ module.exports = async function handler(req, res) {
         cvsPhone: phone,
         ...(pm ? { pm } : {}),
         ...(custPhone ? { custPhone } : {}),
-        ...(custReceiver ? { custReceiver } : {})
+        ...(custReceiver ? { custReceiver } : {}),
+        ...(h ? { h } : {})
     });
 
     res.writeHead(302, { Location: `${SITE_URL}/?${params.toString()}` });
