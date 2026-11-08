@@ -50,11 +50,14 @@ module.exports = async function handler(req, res) {
     // 客人選完門市回來就變成要重填一次、付款方式也被打回「匯款」。這裡把這三樣東西一起帶在
     // ServerReplyURL 上（綠界選店完成後會原樣把這個網址導回來，query string 不會被綠界動到），
     // 讓門市資訊跟這三樣東西用同一條路徑回到官網，不再只靠 localStorage 能不能撐過這趟。
-    const replyExtra = new URLSearchParams({
-        pm: typeof req.query.pm === 'string' ? req.query.pm.slice(0, 50) : '',
-        custPhone: typeof req.query.custPhone === 'string' ? req.query.custPhone.slice(0, 50) : '',
-        custReceiver: typeof req.query.custReceiver === 'string' ? req.query.custReceiver.slice(0, 100) : ''
-    });
+    // ✅ h：官網在導來這裡之前，先把購物車、名字、LINE 會員、手機、收件人存到雲端（cartHandoff），
+    // 這裡只帶那組代號。有些手機瀏覽器（IG/LINE 內建、私密瀏覽）繞去綠界再回來會把 localStorage 清掉，
+    // 客人就會被丟回首頁、購物車變空；有代號就能從雲端整個補回來。有 h 的時候手機/收件人已經在雲端，
+    // 就不用再塞進網址（綠界的 ServerReplyURL 最多 200 字，中文名字很容易超過）。
+    const q = (k, n) => (typeof req.query[k] === 'string' ? req.query[k].slice(0, n) : '');
+    const h = /^[A-Za-z0-9_-]{12,64}$/.test(q('h', 64)) ? q('h', 64) : '';
+    const extra = h ? { pm: q('pm', 50), h } : { pm: q('pm', 50), custPhone: q('custPhone', 50), custReceiver: q('custReceiver', 100) };
+    const replyExtra = new URLSearchParams(Object.fromEntries(Object.entries(extra).filter(([, v]) => v)));
 
     const params = {
         MerchantID: MERCHANT_ID,
