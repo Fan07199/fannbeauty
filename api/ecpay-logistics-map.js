@@ -38,8 +38,16 @@ const genCheckMacValue = (params) => {
 const escapeHtml = (str) => String(str || '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
+// ✅ 客人從哪個網址來，就回到哪個網址（www / 不帶 www 在瀏覽器眼中是兩個不同的網站，
+// 存在手機裡的購物車、名字、LINE 登入互不相通；回錯邊客人就會看到空的購物車或被要求重新登入）
+const siteUrlOf = (req) => {
+    const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').toLowerCase().split(',')[0].trim();
+    if (/^(www\.)?fann-beauty\.com$/.test(host) || /^[a-z0-9-]+\.vercel\.app$/.test(host)) return `https://${host}`;
+    return process.env.SITE_URL || FALLBACK_SITE_URL;
+};
+
 module.exports = async function handler(req, res) {
-    const SITE_URL = process.env.SITE_URL || (req.headers.host ? `https://${req.headers.host}` : FALLBACK_SITE_URL);
+    const SITE_URL = siteUrlOf(req);
 
     // ✅ 這裡只是選門市，還沒有真正的訂單編號，用時間戳記湊一組符合格式（英數字、≤20碼）的暫用編號就好，
     // 選店結果本身不會拿這組編號去查訂單，客人選完店之後是直接把門市資訊帶回官網、下單當下才會真正寫進訂單
