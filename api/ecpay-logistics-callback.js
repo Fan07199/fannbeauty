@@ -8,8 +8,16 @@
 
 const FALLBACK_SITE_URL = 'https://www.fann-beauty.com';
 
+// ✅ 客人從哪個網址來，就回到哪個網址（www / 不帶 www 在瀏覽器眼中是兩個不同的網站，
+// 存在手機裡的購物車、名字、LINE 登入互不相通；回錯邊客人就會看到空的購物車或被要求重新登入）
+const siteUrlOf = (req) => {
+    const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').toLowerCase().split(',')[0].trim();
+    if (/^(www\.)?fann-beauty\.com$/.test(host) || /^[a-z0-9-]+\.vercel\.app$/.test(host)) return `https://${host}`;
+    return process.env.SITE_URL || FALLBACK_SITE_URL;
+};
+
 module.exports = async function handler(req, res) {
-    const SITE_URL = process.env.SITE_URL || (req.headers.host ? `https://${req.headers.host}` : FALLBACK_SITE_URL);
+    const SITE_URL = siteUrlOf(req);
     const body = req.body || {};
 
     const storeId = typeof body.CVSStoreID === 'string' ? body.CVSStoreID : '';
@@ -26,7 +34,9 @@ module.exports = async function handler(req, res) {
 
     if (!storeId) {
         // ✅ 客人在綠界頁面按上一頁/取消，沒有真的選店，就導回結帳頁，不帶門市參數
-        res.writeHead(302, { Location: `${SITE_URL}/${h ? `?h=${h}` : ''}` });
+        // mf：沒拿到門市時，把「綠界是怎麼回來的」帶回官網記錄下來（POST/GET、帶了幾個欄位），方便之後查原因
+        const mf = `${req.method || ''}_${Object.keys(body).length}`.replace(/[^A-Za-z0-9_]/g, '').slice(0, 20);
+        res.writeHead(302, { Location: `${SITE_URL}/${h ? `?h=${h}&mf=${mf}` : ''}` });
         res.end();
         return;
     }
