@@ -27,7 +27,10 @@ module.exports = async function handler(req, res) {
 
     // ✅ 這三樣是官網那邊在導去選店之前，掛在 ServerReplyURL 網址上帶過來的（付款方式、
     // 客人手機、收件人姓名），跟綠界選店結果本身無關，這裡只是原封不動地接住、繼續往下傳
-    const pm = typeof req.query.pm === 'string' ? req.query.pm : '';
+    // p 是 ecpay-logistics-map 放的付款方式代號（不讓 credit_card 這種字出現在給綠界的網址上），這裡換回原值；
+    // pm 是舊版網址直接帶的寫法，還在路上的舊連結照樣接受
+    const PM_FROM_CODE = { c: 'cvs_cod', k: 'credit_card', b: 'bank' };
+    const pm = PM_FROM_CODE[typeof req.query.p === 'string' ? req.query.p : ''] || (typeof req.query.pm === 'string' ? req.query.pm : '');
     const custPhone = typeof req.query.custPhone === 'string' ? req.query.custPhone : '';
     const custReceiver = typeof req.query.custReceiver === 'string' ? req.query.custReceiver : '';
     const h = typeof req.query.h === 'string' && /^[A-Za-z0-9_-]{12,64}$/.test(req.query.h) ? req.query.h : '';
@@ -36,7 +39,7 @@ module.exports = async function handler(req, res) {
         // ✅ 客人在綠界頁面按上一頁/取消，沒有真的選店，就導回結帳頁，不帶門市參數
         // mf：沒拿到門市時，把「綠界是怎麼回來的」帶回官網記錄下來（POST/GET、帶了幾個欄位），方便之後查原因
         const mf = `${req.method || ''}_${Object.keys(body).length}`.replace(/[^A-Za-z0-9_]/g, '').slice(0, 20);
-        res.writeHead(302, { Location: `${SITE_URL}/${h ? `?h=${h}&mf=${mf}` : ''}` });
+        res.writeHead(302, { Location: `${SITE_URL}/${h ? `?h=${h}&mf=${mf}${pm ? `&pm=${encodeURIComponent(pm)}` : ''}` : ''}` });
         res.end();
         return;
     }

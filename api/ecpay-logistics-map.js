@@ -64,7 +64,13 @@ module.exports = async function handler(req, res) {
     // 就不用再塞進網址（綠界的 ServerReplyURL 最多 200 字，中文名字很容易超過）。
     const q = (k, n) => (typeof req.query[k] === 'string' ? req.query[k].slice(0, n) : '');
     const h = /^[A-Za-z0-9_-]{12,64}$/.test(q('h', 64)) ? q('h', 64) : '';
-    const extra = h ? { pm: q('pm', 50), h } : { pm: q('pm', 50), custPhone: q('custPhone', 50), custReceiver: q('custReceiver', 100) };
+    // ✅ 付款方式不直接寫在給綠界的網址上，改成一個字母的代號（p=k 之類）。
+    // 實際觀察：選「信用卡」再去選門市的客人，選完都回不到結帳畫面（網址上會出現 pm=credit_card），
+    // 選「超商取貨付款／匯款」的客人卻都正常；兩者唯一的差別就是這個字串，所以不讓它出現在綠界那一段。
+    // 回到官網前由 ecpay-logistics-callback 換回原本的值，官網那邊收到的參數跟以前一樣。
+    const PM_CODE = { cvs_cod: 'c', credit_card: 'k', bank: 'b' };
+    const p = PM_CODE[q('pm', 50)] || '';
+    const extra = h ? { p, h } : { p, custPhone: q('custPhone', 50), custReceiver: q('custReceiver', 100) };
     const replyExtra = new URLSearchParams(Object.fromEntries(Object.entries(extra).filter(([, v]) => v)));
 
     const params = {
