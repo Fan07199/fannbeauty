@@ -123,6 +123,9 @@ const calcDiscount = (promo, locked, codeGroups, eligibleTotalOverride = null, e
             if (promo.tierRepeat && promo.tierMode !== 'percent') {
                 const first = tiers.slice().sort((a, b) => (Number(a.threshold) || 0) - (Number(b.threshold) || 0))[0];
                 const th = Number(first.threshold) || 0;
+                // tierMin：從滿多少才開始折（例如滿 $1111 是免運、滿 $2222 才開始每滿 $1111 折 $111）
+                const min = Number(promo.tierMin) || 0;
+                if (min > 0 && basisValue < min) return 0;
                 return th > 0 ? Math.min(eTotal, Math.floor(basisValue / th) * (Number(first.discount) || 0)) : 0;
             }
             // ✅ tierMode:'percent' 代表這一階填的是折數（例如 92 代表打92折，用 eTotal 算出實際折扣金額）；
